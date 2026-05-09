@@ -1,37 +1,79 @@
 # TrendLogic
 
-TrendLogic：基于Multi-Agent的全自动短视频/笔记带货选品助手。
+TrendLogic 是一个面向电商运营场景的对话式 Multi-Agent AI 工作台。MVP 已包含用户注册/登录、角色权限、智能运营台、Agent trace 展示、最新爆品、基础用户画像和一键召回接口。
 
-## 项目介绍
+## 目录结构
 
-### 1. 项目定位
-TrendLogic是一款面向自媒体带货博主、网购直播客户、创业人事以及跨境电商商家的自动化选品辅助工具。它可以对热品、爆品进行自动化的数据抓取，还能够理解用户意图、分析用户偏好、并实现爆品的精准匹配推送。通过多智能体协作，系统能够主动发现全网热点，并为用户提供具备商业变现价值的选品方案。
+```text
+frontend/   React + TypeScript 工作台
+backend/    FastAPI + SQLAlchemy + SQLite API
+agents/     Multi-Agent 定义、编排与工具
+rag/        独立 RAG 模块占位，后续替换 LanceDB
+mcp/        工具注册层，后续接入 MCP
+docs/       架构、API、Agent 和记忆设计文档
+```
 
-### 2. 核心价值
+## 后端运行
 
-1. 分类系统：有效过滤无关信息，专注于电商与自媒体领域；
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+cd ..
+python -m uvicorn backend.app.main:app --reload
+```
 
-2. 交互系统：通过多轮对话，总结提取用户模糊需求后的真实业务目标；
+后端默认地址：`http://localhost:8000`
 
-3. 数据写入：提供有据可依的选品逻辑；
+## 前端运行
 
-4. 个性化召回：基于用户历史对话，实现爆款信息的主动推送。
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
+前端默认地址：`http://localhost:5173`
 
-## 项目设计思路
-本系统的设计核心在于简化电商、自媒体选品流程。采用分层架构设计，通过五个不同功能的Agent协同工作，形成一个自动化选品辅助工具。
+## 环境变量
 
-### 1. 分类决策Agent
-当用户进行对话后，系统会对用户的初始输入进行初步判定，判断用户提出的问题是否属于“选品咨询、流量分析、带货建议”等业务范围；如果不符合则拒绝回答与平台功能无关的闲聊，节省token并维持系统环境整洁。
+复制 `.env.example` 并按需调整。MVP 默认使用 SQLite：
 
-### 2. 需求分析Agent
-当用户意图被确认后，进入沟通环节。针对用户描述不清的情况，通过多轮对话进行意图补全，并将非结构化的对话内容转化为标准化的“需求画像”，作为后续检索的依据。
+```text
+DATABASE_URL=sqlite:///./trendlogic.db
+JWT_SECRET=replace-with-a-long-random-secret
+ADMIN_INVITE_CODE=trendlogic-admin
+```
 
-### 3. 选品咨询Agent
-基于细化后的需求，系统调用后台数据库和实时搜索接口。根据用户的需求调取相关的流量、选题、商品，为客户提供信息。
+注册 admin 用户时，在注册表单填写 `ADMIN_INVITE_CODE` 对应的邀请码。
 
-### 4. 用户画像Agent
-系统会记录并分析每一位用户的交互行为，形成长期记忆。分析用户经常关注的垂直领域（如：数码、美妆）、访问频率、以及对推荐结果的反馈，存储在用户画像中。
+## 已实现能力
 
-### 5. 用户召回Agent
-系统后台持续监控外部流量波动。当发现某类目热点爆发，且该类目正好匹配某位用户的历史画像时，系统会自动生成“召回信息”。
+- 用户注册、登录、`account_id` 自动生成。
+- JWT 鉴权和 `normal_user` / `admin` 角色。
+- 后端强制 admin 权限校验。
+- 智能运营台 `/chat`，展示 trace 消息和 final 回复。
+- 规则版 `RouterAgent`、`RequirementAgent`、`ProductConsultantAgent`。
+- 最新爆品 `/trending`，支持公开条目上传。
+- admin 用户洞察和一键召回基础接口及页面。
+- RAG、MCP、Agent tools 独立目录和可替换接口。
+
+## 关键接口
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/chat/message`
+- `GET /api/trending`
+- `POST /api/trending`
+- `GET /api/admin/user-insights`
+- `GET /api/recall/candidates`
+- `POST /api/recall/generate`
+
+## 后续计划
+
+- 将规则版 Agent 替换为可配置 LLM Provider。
+- 将 RAG 的本地向量存储替换为 LanceDB。
+- 补齐 admin 爆品管理编辑界面和内部文档向量化流程。
+- 增加 Alembic 迁移、自动化测试和会话摘要任务。
