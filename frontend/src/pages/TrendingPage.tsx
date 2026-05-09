@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../stores/auth";
@@ -8,12 +8,28 @@ export default function TrendingPage() {
   const { user } = useAuth();
   const [items, setItems] = useState<TrendingItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [activeCategory, setActiveCategory] = useState("全部");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("");
   const [summary, setSummary] = useState("");
   const [tags, setTags] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { 全部: items.length };
+    for (const item of items) {
+      counts[item.category] = (counts[item.category] ?? 0) + 1;
+    }
+    return counts;
+  }, [items]);
+  const visibleCategories = useMemo(() => {
+    const names = new Set(categories);
+    for (const item of items) {
+      names.add(item.category);
+    }
+    return ["全部", ...Array.from(names)];
+  }, [categories, items]);
+  const filteredItems = activeCategory === "全部" ? items : items.filter((item) => item.category === activeCategory);
 
   async function load() {
     if (!user) return;
@@ -24,6 +40,7 @@ export default function TrendingPage() {
       setItems(nextItems);
       setCategories(nextCategories);
       setCategory((current) => current || nextCategories[0] || "");
+      setActiveCategory((current) => (current === "全部" || nextCategories.includes(current) ? current : "全部"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
     } finally {
@@ -50,8 +67,9 @@ export default function TrendingPage() {
         is_ai_generated: false
       });
       setItems((current) => [item, ...current]);
+      setActiveCategory(item.category);
       setTitle("");
-      setCategory("");
+      setCategory(categories[0] || item.category);
       setSummary("");
       setTags("");
     } catch (err) {
@@ -69,6 +87,19 @@ export default function TrendingPage() {
         <button className="ghostButton" onClick={load} disabled={refreshing}>
           <RefreshCw className={refreshing ? "spinIcon" : ""} size={16} /> {refreshing ? "刷新中" : "刷新"}
         </button>
+      </div>
+      <div className="categoryBar" aria-label="爆品分类">
+        {visibleCategories.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={activeCategory === item ? "categoryPill active" : "categoryPill"}
+            onClick={() => setActiveCategory(item)}
+          >
+            <span>{item}</span>
+            <strong>{categoryCounts[item] ?? 0}</strong>
+          </button>
+        ))}
       </div>
       <div className="contentGrid">
         <form className="sideForm" onSubmit={submit}>
@@ -101,7 +132,14 @@ export default function TrendingPage() {
         </form>
         <div className="itemList">
           {error ? <p className="inlineError">{error}</p> : null}
-          {items.map((item) => (
+          <div className="listHeader">
+            <strong>{activeCategory === "全部" ? "全部爆品" : activeCategory}</strong>
+            <span>{filteredItems.length} 条内容</span>
+          </div>
+          {filteredItems.length === 0 ? (
+            <div className="emptyState">这个分类下还没有条目，可以在左侧上传一条新的热点内容。</div>
+          ) : null}
+          {filteredItems.map((item) => (
             <article className="trendCard" key={item.id}>
               <div className="trendHeader">
                 <strong>{item.title}</strong>
