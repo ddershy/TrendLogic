@@ -1,7 +1,7 @@
 # TrendLogic 项目开发 Prompt
 
-> 适用对象：Codex / Copilot Coding Agent / Cursor Agent / 其他代码执行型 Agent  
-> 项目定位：面向电商运营场景的 Multi-Agent AI 系统  
+> 适用对象：Codex / Copilot Coding Agent / Cursor Agent / 其他代码执行型 Agent
+> 项目定位：面向电商运营场景的 Multi-Agent AI 系统
 > 推荐使用方式：将本文档作为项目根目录下的 `CODEX_PROJECT_PROMPT.md`，并让代码 Agent 逐步执行。
 
 ---
@@ -1108,15 +1108,26 @@ TOOL_REGISTRY = {
 - updated_at
 ```
 
-### memory_summaries
+### user_memories
 
 ```text
 - id
 - user_id
-- session_id
+- session_id nullable
+- memory_type: short_term / long_term / preference / behavior / business_need / negative_preference / recall_signal
+- memory_scope: session / user / global
+- title
+- content
 - summary
-- extracted_preferences
+- tags
+- importance
+- confidence
+- decay_score
+- source
+- status
+- last_used_at
 - created_at
+- updated_at
 ```
 
 ### recall_records
@@ -1291,22 +1302,22 @@ RAG、用户画像、一键召回可以先设计接口和目录，后续逐步�
 
 ### 页面命名
 
-| 原名称 | 建议名称 | 英文路由 |
-|---|---|---|
-| 默认对话 | 智能运营台 | `/chat` |
-| 最新爆品 | 最新爆品 | `/trending` |
-| 用户画像 | 用户洞察 | `/user-insights` |
-| 一键召回 | 一键召回 | `/recall` |
+| 原名称   | 建议名称   | 英文路由           |
+| -------- | ---------- | ------------------ |
+| 默认对话 | 智能运营台 | `/chat`          |
+| 最新爆品 | 最新爆品   | `/trending`      |
+| 用户画像 | 用户洞察   | `/user-insights` |
+| 一键召回 | 一键召回   | `/recall`        |
 
 ### Agent 命名
 
-| 中文名 | 代码名 |
-|---|---|
-| 分类决策 Agent | `RouterAgent` |
-| 需求分析 Agent | `RequirementAgent` |
+| 中文名         | 代码名                     |
+| -------------- | -------------------------- |
+| 分类决策 Agent | `RouterAgent`            |
+| 需求分析 Agent | `RequirementAgent`       |
 | 选品咨询 Agent | `ProductConsultantAgent` |
-| 用户画像 Agent | `UserProfileAgent` |
-| 用户召回 Agent | `RecallAgent` |
+| 用户画像 Agent | `UserProfileAgent`       |
+| 用户召回 Agent | `RecallAgent`            |
 
 ---
 
@@ -1328,3 +1339,39 @@ RAG、用户画像、一键召回可以先设计接口和目录，后续逐步�
 - 新增了哪些能力；
 - 如何运行；
 - 还有哪些待完成事项。
+
+## 数据库的补充
+
+
+目前数据库设计需要修正。TrendLogic 的核心不是普通聊天系统，而是以用户为中心的电商运营 Agent 系统。请停止继续扩散散表设计，先重构数据模型为 User-Centric 架构。
+
+我的要求如下：
+
+1. users 是核心主表，所有业务数据都必须直接或间接归属于 user。
+2. chat message 可以一条一条保存，这是可以接受的，但每条 chat_messages 必须包含 user_id 和 session_id，不能成为无法归属的孤立消息。
+3. chat_sessions 必须包含 user_id，用于把某个用户的一次完整对话聚合起来。
+4. user_profiles 必须和 users 一对一绑定，user_profiles.user_id 必须唯一。不要让一个用户产生多个散乱 profile。
+5. 记忆系统必须按照 user_id 做一级索引，同时支持分类索引。请新增或重构为 user_memories 表，字段包括：
+   - user_id
+   - session_id nullable
+   - memory_type: short_term / long_term / preference / behavior / business_need / negative_preference / recall_signal
+   - memory_scope: session / user / global
+   - title
+   - content
+   - summary
+   - tags
+   - importance
+   - confidence
+   - decay_score
+   - source
+   - status
+   - last_used_at
+6. 长期记忆、短期记忆、用户偏好、负向偏好、召回信号都应该是 user_memories 的不同 memory_type，而不是到处散落。
+7. recall_records 必须绑定 user_id。
+8. trending_items 可以是全局内容，但如果是用户上传，必须绑定 created_by。
+9. uploaded_documents 如果是 admin 上传，也必须保存 uploaded_by。
+10. 请提供一个用户聚合查询接口，例如 GET /api/users/{user_id}/workspace，能够一次性返回 user、profile、recent_sessions、recent_messages、memories 和 recall_records。
+11. 请不要把所有消息直接塞进 users 表的大 JSON 字段。我要的是“逻辑上归属于用户”，不是把所有数据物理塞进一个字段。
+12. 请先输出你准备修改哪些 model、schema、service、router 文件，然后再小步修改。不要一次性大规模重构无法检查。
+
+请按 Read → Plan → Modify → Test → Explain 的方式执行。

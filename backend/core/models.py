@@ -91,13 +91,45 @@ class UserProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class MemorySummary(models.Model):
+class UserMemory(models.Model):
+    MEMORY_TYPE_CHOICES = [
+        ("short_term", "Short Term"),
+        ("long_term", "Long Term"),
+        ("preference", "Preference"),
+        ("behavior", "Behavior"),
+        ("business_need", "Business Need"),
+        ("negative_preference", "Negative Preference"),
+        ("recall_signal", "Recall Signal"),
+    ]
+    MEMORY_SCOPE_CHOICES = [("session", "Session"), ("user", "User"), ("global", "Global")]
+    STATUS_CHOICES = [("active", "Active"), ("archived", "Archived"), ("decayed", "Decayed"), ("deleted", "Deleted")]
+
     id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("mem"))
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    session = models.ForeignKey(ChatSession, on_delete=models.SET_NULL, null=True, blank=True)
-    summary = models.TextField()
-    extracted_preferences = models.JSONField(default=dict, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="memories")
+    session = models.ForeignKey(ChatSession, on_delete=models.SET_NULL, null=True, blank=True, related_name="memories")
+    memory_type = models.CharField(max_length=32, choices=MEMORY_TYPE_CHOICES, db_index=True)
+    memory_scope = models.CharField(max_length=24, choices=MEMORY_SCOPE_CHOICES, default="user", db_index=True)
+    title = models.CharField(max_length=160)
+    content = models.TextField()
+    summary = models.TextField(blank=True, default="")
+    tags = models.JSONField(default=list, blank=True)
+    importance = models.FloatField(default=0.5)
+    confidence = models.FloatField(default=0.7)
+    decay_score = models.FloatField(default=1.0)
+    source = models.CharField(max_length=120, default="system")
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default="active", db_index=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "user_memories"
+        indexes = [
+            models.Index(fields=["user", "memory_type", "status"]),
+            models.Index(fields=["user", "memory_scope", "status"]),
+            models.Index(fields=["user", "session", "memory_type"]),
+            models.Index(fields=["last_used_at"]),
+        ]
 
 
 class RecallRecord(models.Model):

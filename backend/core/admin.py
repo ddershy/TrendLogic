@@ -6,12 +6,12 @@ from django.utils.html import format_html
 from .models import (
     ChatMessage,
     ChatSession,
-    MemorySummary,
     RecallRecord,
     TrendingCategory,
     TrendingItem,
     UploadedDocument,
     User,
+    UserMemory,
     UserProfile,
 )
 
@@ -93,15 +93,23 @@ class UploadedDocumentAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at")
 
 
-@admin.register(MemorySummary)
-class MemorySummaryAdmin(admin.ModelAdmin):
-    list_display = ("user", "session", "short_summary", "created_at")
-    list_filter = ("created_at",)
-    search_fields = ("summary", "user__display_name", "session__title")
-    readonly_fields = ("id", "created_at")
+@admin.register(UserMemory)
+class UserMemoryAdmin(admin.ModelAdmin):
+    list_display = ("title", "user", "memory_type", "memory_scope", "status", "importance", "confidence", "decay_score", "last_used_at")
+    list_filter = ("memory_type", "memory_scope", "status", "source", "last_used_at", "created_at")
+    search_fields = ("title", "content", "summary", "tags", "user__display_name", "user__account_id", "session__title")
+    readonly_fields = ("id", "created_at", "updated_at")
+    list_editable = ("status", "importance", "confidence", "decay_score")
+    fieldsets = (
+        ("归属", {"fields": ("id", "user", "session")}),
+        ("分类", {"fields": ("memory_type", "memory_scope", "status", "source")}),
+        ("内容", {"fields": ("title", "content", "summary", "tags")}),
+        ("评分", {"fields": ("importance", "confidence", "decay_score", "last_used_at")}),
+        ("时间", {"fields": ("created_at", "updated_at")}),
+    )
 
     @admin.display(description="摘要")
-    def short_summary(self, obj: MemorySummary) -> str:
+    def short_summary(self, obj: UserMemory) -> str:
         return obj.summary[:64] + ("..." if len(obj.summary) > 64 else "")
 
 

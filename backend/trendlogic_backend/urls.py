@@ -26,4 +26,5 @@ urlpatterns = [
     path("api/recall/generate", views.recall_generate),
     path("api/users/<str:user_id>/memory", views.user_memory),
     path("api/users/<str:user_id>/memory/summarize", views.summarize_memory),
+    path("api/users/<str:user_id>/workspace", views.user_workspace),
 ]

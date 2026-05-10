@@ -25,6 +25,7 @@ from .models import (
     TrendingItem,
     UploadedDocument,
     User,
+    UserMemory,
     UserProfile,
 )
 
@@ -68,6 +69,20 @@ def register(request: HttpRequest) -> JsonResponse:
         preferred_platforms=preferred_platforms,
         interest_weights={tag: 0.45 for tag in preferred_categories + preferred_platforms},
     )
+    if preferred_categories or preferred_platforms or payload.get("business_focus"):
+        UserMemory.objects.create(
+            user=user,
+            memory_type="preference",
+            memory_scope="user",
+            title="注册时填写的初始偏好",
+            content=json.dumps(user.preferences, ensure_ascii=False),
+            summary="用户注册时提供的领域、平台和经营方向偏好。",
+            tags=preferred_categories + preferred_platforms,
+            importance=0.65,
+            confidence=0.8,
+            source="registration",
+            last_used_at=timezone.now(),
+        )
     return JsonResponse(auth_response(user))
 
 
@@ -104,6 +119,20 @@ def chat_message(request: HttpRequest) -> JsonResponse:
         return error("Message cannot be empty", 400)
     session = get_or_create_session(user, payload.get("session_id"), content)
     ChatMessage.objects.create(session=session, user=user, role="user", content=content)
+    UserMemory.objects.create(
+        user=user,
+        session=session,
+        memory_type="short_term",
+        memory_scope="session",
+        title="用户本轮输入",
+        content=content,
+        summary=content[:160],
+        tags=UserProfileAgent().extract_tags(content),
+        importance=0.45,
+        confidence=0.85,
+        source="chat_message",
+        last_used_at=timezone.now(),
+    )
     trend_titles = list(
         TrendingItem.objects.filter(visibility="public").order_by("-heat_score", "-created_at").values_list("title", flat=True)[:5]
     )
@@ -326,6 +355,19 @@ def recall_generate(request: HttpRequest) -> JsonResponse:
         generated_message=generated["message"],
         created_by=admin,
     )
+    UserMemory.objects.create(
+        user=user,
+        memory_type="recall_signal",
+        memory_scope="user",
+        title="召回信号",
+        content=generated["message"],
+        summary=generated["reason"],
+        tags=generated["matched_trends"],
+        importance=generated["recall_score"],
+        confidence=0.78,
+        source="recall_agent",
+        last_used_at=timezone.now(),
+    )
     return JsonResponse({"user_id": user.id, **generated})
 
 
@@ -335,8 +377,35 @@ def user_memory(request: HttpRequest, user_id: str) -> JsonResponse:
         return error("Invalid or expired token", 401)
     if user.role != "admin" and user.id != user_id:
         return error("Cannot access this memory", 403)
-    profile = UserProfile.objects.filter(user_id=user_id).first()
-    return JsonResponse({"user_id": user_id, "summary": profile.summary if profile else "", "interest_weights": profile.interest_weights if profile else {}})
+    memories = UserMemory.objects.filter(user_id=user_id).exclude(status="deleted").order_by("-importance", "-updated_at")[:100]
+    return JsonResponse({"user_id": user_id, "memories": [serialize_memory(memory) for memory in memories]})
+
+
+def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
+    requester = current_user(request)
+    if not requester:
+        return error("Invalid or expired token", 401)
+    if requester.role != "admin" and requester.id != user_id:
+        return error("Cannot access this workspace", 403)
+    target = User.objects.filter(id=user_id).first()
+    if not target:
+        return error("User not found", 404)
+
+    profile = getattr(target, "profile", None)
+    recent_sessions = ChatSession.objects.filter(user=target).order_by("-updated_at")[:10]
+    recent_messages = ChatMessage.objects.filter(user=target).order_by("-created_at")[:30]
+    memories = UserMemory.objects.filter(user=target).exclude(status="deleted").order_by("-importance", "-updated_at")[:100]
+    recall_records = RecallRecord.objects.filter(user=target).order_by("-created_at")[:20]
+    return JsonResponse(
+        {
+            "user": serialize_user(target),
+            "profile": serialize_user_insight(target, profile),
+            "recent_sessions": [serialize_session(session) for session in recent_sessions],
+            "recent_messages": [serialize_chat_message(message) for message in recent_messages],
+            "memories": [serialize_memory(memory) for memory in memories],
+            "recall_records": [serialize_recall_record(record) for record in recall_records],
+        }
+    )
 
 
 @csrf_exempt
@@ -349,8 +418,22 @@ def summarize_memory(request: HttpRequest, user_id: str) -> JsonResponse:
     target = User.objects.filter(id=user_id).first()
     if not target:
         return error("User not found", 404)
-    profile, _ = UserProfile.objects.get_or_create(user=target, defaults={"summary": "暂无足够对话形成长期记忆。"})
-    return JsonResponse({"status": "ok", "summary": profile.summary})
+    recent_messages = ChatMessage.objects.filter(user=target).order_by("-created_at")[:20]
+    summary = "；".join(message.content[:60] for message in reversed(list(recent_messages))) or "暂无足够对话形成长期记忆。"
+    memory = UserMemory.objects.create(
+        user=target,
+        memory_type="long_term",
+        memory_scope="user",
+        title="长期记忆摘要",
+        content=summary,
+        summary=summary[:240],
+        tags=[],
+        importance=0.75,
+        confidence=0.65,
+        source="manual_summarize",
+        last_used_at=timezone.now(),
+    )
+    return JsonResponse({"status": "ok", "memory": serialize_memory(memory)})
 
 
 def read_json(request: HttpRequest) -> dict:
@@ -412,6 +495,19 @@ def update_profile_from_text(user: User, content: str) -> None:
     profile.last_active_at = timezone.now()
     if tags:
         profile.summary = f"用户最近关注：{', '.join(sorted(set(tags)))}。"
+        UserMemory.objects.create(
+            user=user,
+            memory_type="preference",
+            memory_scope="user",
+            title="对话中识别到的偏好",
+            content=content,
+            summary=f"用户表达了与 {', '.join(sorted(set(tags)))} 相关的兴趣。",
+            tags=sorted(set(tags)),
+            importance=0.6,
+            confidence=0.72,
+            source="profile_agent",
+            last_used_at=timezone.now(),
+        )
     profile.save()
 
 
@@ -504,6 +600,40 @@ def serialize_document(document: UploadedDocument) -> dict:
         "visibility": document.visibility,
         "vectorized": document.vectorized,
         "created_at": iso(document.created_at),
+    }
+
+
+def serialize_memory(memory: UserMemory) -> dict:
+    return {
+        "id": memory.id,
+        "user_id": memory.user_id,
+        "session_id": memory.session_id,
+        "memory_type": memory.memory_type,
+        "memory_scope": memory.memory_scope,
+        "title": memory.title,
+        "content": memory.content,
+        "summary": memory.summary,
+        "tags": memory.tags,
+        "importance": memory.importance,
+        "confidence": memory.confidence,
+        "decay_score": memory.decay_score,
+        "source": memory.source,
+        "status": memory.status,
+        "last_used_at": iso(memory.last_used_at) if memory.last_used_at else None,
+        "created_at": iso(memory.created_at),
+        "updated_at": iso(memory.updated_at),
+    }
+
+
+def serialize_recall_record(record: RecallRecord) -> dict:
+    return {
+        "id": record.id,
+        "user_id": record.user_id,
+        "recall_score": record.recall_score,
+        "matched_trends": record.matched_trends,
+        "generated_message": record.generated_message,
+        "created_at": iso(record.created_at),
+        "created_by": record.created_by_id,
     }
 
 
