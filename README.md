@@ -22,10 +22,15 @@ python -m venv .venv
 pip install -r requirements.txt
 python manage.py migrate --run-syncdb
 python manage.py seed_trendlogic
+python manage.py createsuperuser
 python manage.py runserver 8000
 ```
 
 后端默认地址：`http://localhost:8000`
+
+Django 可视化管理后台：`http://localhost:8000/admin/`
+
+后台账号使用 `createsuperuser` 创建，用于增删改查用户、爆品、分类、聊天记录、用户画像、上传文档和召回记录。
 
 ## 前端运行
 
