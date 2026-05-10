@@ -9,6 +9,7 @@
 - `GET /api/chat/history`
 - `GET /api/chat/sessions`
 - `GET /api/trending`
+- `GET /api/trending/categories`
 - `POST /api/trending`
 - `PUT /api/trending/{id}`
 - `DELETE /api/trending/{id}`

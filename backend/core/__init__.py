@@ -1,0 +1,1 @@
+"""TrendLogic Django core app."""

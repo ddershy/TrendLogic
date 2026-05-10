@@ -96,19 +96,19 @@ TrendLogic 是一个面向电商运营的对话式 AI Multi-Agent 系统。
 
 ### 前端
 
-- React / Next.js
+- Vue
 - TypeScript
-- Tailwind CSS
-- shadcn/ui
-- Zustand 或 Redux Toolkit 管理状态
+- Vite
+- CSS Modules / Tailwind CSS 可选
+- Pinia 或 Vue Composition API 管理状态
 
 ### 后端
 
 - Python
-- FastAPI
-- SQLAlchemy
-- Pydantic
-- Alembic
+- Django
+- Django ORM
+- Django JSON API 或 Django REST Framework 可选
+- Django migrations
 - PostgreSQL 或 SQLite 开发环境
 - Redis 可作为后续缓存/任务队列
 
@@ -141,6 +141,8 @@ TrendLogic/
 ├── frontend/
 │   ├── src/
 │   │   ├── app/ 或 pages/
+│   │   ├── App.vue
+│   │   ├── main.ts
 │   │   ├── components/
 │   │   │   ├── chat/
 │   │   │   ├── layout/
@@ -155,27 +157,17 @@ TrendLogic/
 │   └── package.json
 │
 ├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── database.py
-│   │   ├── models/
-│   │   ├── schemas/
-│   │   ├── routers/
-│   │   │   ├── auth.py
-│   │   │   ├── chat.py
-│   │   │   ├── trending.py
-│   │   │   ├── admin.py
-│   │   │   ├── users.py
-│   │   │   └── recall.py
-│   │   ├── services/
-│   │   │   ├── auth_service.py
-│   │   │   ├── chat_service.py
-│   │   │   ├── memory_service.py
-│   │   │   ├── profile_service.py
-│   │   │   ├── trending_service.py
-│   │   │   └── recall_service.py
-│   │   └── utils/
+│   ├── manage.py
+│   ├── trendlogic_backend/
+│   │   ├── settings.py
+│   │   ├── urls.py
+│   │   ├── asgi.py
+│   │   └── wsgi.py
+│   ├── core/
+│   │   ├── models.py
+│   │   ├── views.py
+│   │   ├── middleware.py
+│   │   └── management/
 │   └── requirements.txt
 │
 ├── agents/
@@ -1151,7 +1143,7 @@ TOOL_REGISTRY = {
 
 1. 检查现有项目结构；
 2. 创建或整理 `frontend`、`backend`、`agents`、`rag`、`mcp` 目录；
-3. 搭建 FastAPI 后端；
+3. 搭建 Django 后端；
 4. 搭建前端基础页面；
 5. 配置环境变量；
 6. 添加 README 和 `.env.example`。

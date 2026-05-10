@@ -46,6 +46,18 @@ button {
   margin-bottom: 28px;
 }
 
+.brandIcon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #e7f6f1;
+  color: #0f5f58;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .brand strong {
   display: block;
   font-size: 18px;
@@ -70,6 +82,9 @@ nav {
 }
 
 .navItem {
+  width: 100%;
+  border: 0;
+  background: transparent;
   color: #d8e5dd;
   display: flex;
   gap: 10px;

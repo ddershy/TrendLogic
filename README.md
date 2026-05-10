@@ -5,8 +5,8 @@ TrendLogic 是一个面向电商运营场景的对话式 Multi-Agent AI 工作�
 ## 目录结构
 
 ```text
-frontend/   React + TypeScript 工作台
-backend/    FastAPI + SQLAlchemy + SQLite API
+frontend/   Vue + TypeScript 工作台
+backend/    Django + SQLite JSON API
 agents/     Multi-Agent 定义、编排与工具
 rag/        独立 RAG 模块占位，后续替换 LanceDB
 mcp/        工具注册层，后续接入 MCP
@@ -20,8 +20,9 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-cd ..
-python -m uvicorn backend.app.main:app --reload
+python manage.py migrate --run-syncdb
+python manage.py seed_trendlogic
+python manage.py runserver 8000
 ```
 
 后端默认地址：`http://localhost:8000`
@@ -41,8 +42,9 @@ npm run dev
 复制 `.env.example` 并按需调整。MVP 默认使用 SQLite：
 
 ```text
-DATABASE_URL=sqlite:///./trendlogic.db
-JWT_SECRET=replace-with-a-long-random-secret
+DJANGO_SECRET_KEY=replace-with-a-long-random-secret
+DJANGO_DEBUG=true
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 ADMIN_INVITE_CODE=trendlogic-admin
 ```
 
@@ -51,7 +53,7 @@ ADMIN_INVITE_CODE=trendlogic-admin
 ## 已实现能力
 
 - 用户注册、登录、`account_id` 自动生成。
-- JWT 鉴权和 `normal_user` / `admin` 角色。
+- Django 签名 Token 鉴权和 `normal_user` / `admin` 角色。
 - 后端强制 admin 权限校验。
 - 智能运营台 `/chat`，展示 trace 消息和 final 回复。
 - 规则版 `RouterAgent`、`RequirementAgent`、`ProductConsultantAgent`。
@@ -76,4 +78,4 @@ ADMIN_INVITE_CODE=trendlogic-admin
 - 将规则版 Agent 替换为可配置 LLM Provider。
 - 将 RAG 的本地向量存储替换为 LanceDB。
 - 补齐 admin 爆品管理编辑界面和内部文档向量化流程。
-- 增加 Alembic 迁移、自动化测试和会话摘要任务。
+- 增加正式 Django migrations、自动化测试和会话摘要任务。
