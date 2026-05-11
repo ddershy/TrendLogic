@@ -1,23 +1,83 @@
+"""
+RouterAgent是一个分类决策Agent，负责根据用户输入的文本内容判断用户的意图，并将问题路由到相应的其余Agent进行处理。
+它通过一个agent来决策
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from .base_agent import BaseAgent
 
+ALLOWED_INTENTS = {
+    "product_selection", #选品
+    "traffic_analysis", #流量趋势分析
+    "content_advice", #内容带货建议
+    "trending_analysis", #趋势分析
+    "user_profile", #用户画像
+    "recall_strategy", #用户召回
+    "platform_strategy", #平台策略
+    "out_of_scope", #不在业务范围内
+}
+
+NEXT_AGENT_MAP = {
+    "product_selection": "requirement_agent",
+    "traffic_analysis": "requirement_agent",
+    "content_advice": "requirement_agent",
+    "trending_analysis": "product_consultant_agent",
+    "user_profile": "user_profile_agent",
+    "recall_strategy": "user_recall_agent",
+    "platform_strategy": "requirement_agent",
+    "out_of_scope": "final",
+}
+
+AGENT_PROMPT = (
+"""
+你是一个分类决策Agent，负责判断用户输入的文本内容是否与电商运营相关，并识别用户的具体意图。你的任务是将用户的问题路由到最合适的后续Agent进行处理，并拒绝用户的无关话题。
+业务范围包括：
+- 选品分析（product_selection）：帮助用户分析和选择适合的商品进行销售。
+- 流量趋势分析（traffic_analysis）：分析电商平台的流量趋势，帮助用户把握市场动态。
+- 内容带货建议（content_advice）：提供关于如何通过内容（如短视频、笔记等）进行带货的建议。
+- 趋势分析（trending_analysis）：分析当前的市场趋势，帮助用户把握热点机会。
+- 用户画像（user_profile）：帮助用户分析目标用户的画像和需求。
+- 用户召回（recall_strategy）：提供用户召回的策略建议，帮助用户提升用户留存和复购。
+- 平台策略（platform_strategy）：提供针对不同电商平台（如淘宝、京东、TikTok等）的运营策略建议。
+
+如如果用户只是闲聊、问天气、写代码、讲故事、学习无关知识，不涉及上述任何一个业务目标，请判断为“out_of_scope”，并拒绝继续分派给后续Agent，避免给出偏题建议。+
+
+你只能输出 JSON，不要输出 Markdown，不要解释。
+
+JSON 格式：
+{
+  "in_scope": true,
+  "intent": "product_selection",
+  "confidence": 0.86,
+  "next_agent": "requirement_agent",
+  "reason": "用户正在询问适合售卖的商品方向",
+  "user_visible_trace": "我先判断这个问题是否属于电商运营任务。当前问题和选品咨询有关，可以进入需求补全流程。"
+}
+""")
 
 @dataclass
 class RouterDecision:
+    """
+    RouterAgent的输入内容
+    """
     in_scope: bool
     intent: str
     confidence: float
-    next_agent: str
-    reason: str
+    next_agent: str | None
+    reason: str #给系统看
+    user_visible_trace: str #给用户看
+
 
 
 class RouterAgent(BaseAgent):
+    """
+    RouterAgent负责根据用户输入的文本内容判断用户的意图，并将问题路由到相应的其余Agent进行处理。
+    """
     name = "分类决策Agent"
 
-    INTENT_KEYWORDS = {
+    INTENT_KEYWORDS = { #用于辅助判断用户意图的关键词列表
         "product_selection": ["选品", "商品", "爆品", "卖什么", "类目", "货源", "上新"],
         "traffic_analysis": ["流量", "趋势", "热度", "搜索", "曝光", "转化"],
         "content_advice": ["带货", "短视频", "笔记", "种草", "脚本", "内容", "小红书", "抖音"],
@@ -26,19 +86,8 @@ class RouterAgent(BaseAgent):
     }
 
     def run(self, user_input: str) -> RouterDecision:
-        text = user_input.lower()
-        best_intent = "unknown"
-        best_score = 0
-        for intent, keywords in self.INTENT_KEYWORDS.items():
-            score = sum(1 for keyword in keywords if keyword.lower() in text)
-            if score > best_score:
-                best_intent = intent
-                best_score = score
-        in_scope = best_score > 0
-        return RouterDecision(
-            in_scope=in_scope,
-            intent=best_intent if in_scope else "out_of_scope",
-            confidence=min(0.55 + best_score * 0.14, 0.96) if in_scope else 0.25,
-            next_agent="requirement_agent" if in_scope else "final",
-            reason="用户问题命中了电商运营相关关键词" if in_scope else "未识别到电商运营、选品、流量或用户增长相关目标",
-        )
+        """
+        根据用户输入的文本内容判断用户的意图，并将问题路由到相应的其余Agent进行处理。
+        """
+        # 简单的关键词匹配逻辑，实际可以替换成更复杂的模型
+        
