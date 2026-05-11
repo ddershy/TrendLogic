@@ -93,6 +93,41 @@ class RouterAgent(BaseAgent):
     def __init__(self, llm_client: LLMClient) -> None:
         self.llm_client = llm_client
 
+    def normalize_decision(self,result:str) -> RouterDecision:
+        intent = result.get("intent", "out_of_scope")
+
+        if intent not in ALLOWED_INTENTS:
+            intent = "out_of_scope"
+        
+        in_scope = bool(result.get("in_scope", intent != "out_of_scope"))
+
+        if intent == "out_of_scope":
+            in_scope = False
+        
+        try:
+            confidence = float(result.get("confidence", 0.0))
+        except (ValueError, TypeError):
+            confidence = 0.5
+        
+        confidence = max(0.0, min(1.0, confidence))
+
+        next_agent = result.get("next_agent") or NEXT_AGENT_MAP[intent]
+        if next_agent not in NEXT_AGENT_MAP.values():
+            next_agent = NEXT_AGENT_MAP[intent]
+        
+        reason = result.get("reason", "")
+        user_visible_trace = result.get("user_visible_trace", "")
+
+        return RouterDecision(
+            in_scope=in_scope,
+            intent=intent,
+            confidence=confidence,
+            next_agent=next_agent,
+            reason=reason,
+            user_visible_trace=user_visible_trace
+        )
+
+
     def run(self, user_input: str) -> RouterDecision:
         messages = [
                {"role": "system","content": ROUTER_AGENT_PROMPT},
@@ -100,11 +135,4 @@ class RouterAgent(BaseAgent):
         ]
         result = self.llm_client.chat_json(messages)
 
-        return RouterDecision(
-            in_scope=result.get("in_scope", False),
-            intent=result.get("intent", "out_of_scope"),
-            confidence=result.get("confidence", 0.0),
-            next_agent=result.get("next_agent", None),
-            reason=result.get("reason", ""),
-            user_visible_trace=result.get("user_visible_trace", "")
-            )
+        return self.normalize_decision(result)
