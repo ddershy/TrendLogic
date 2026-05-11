@@ -1,3 +1,6 @@
-from .orchestrator import AgentOrchestrator
+"""TrendLogic agent package.
 
-__all__ = ["AgentOrchestrator"]
+Import concrete agents or graph modules directly, for example:
+- from agents.router_agent import RouterAgent
+- from agents.graph import TrendLogicGraph
+"""

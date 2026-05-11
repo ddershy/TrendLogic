@@ -16,7 +16,7 @@ export interface AuthResponse {
 }
 
 export interface AgentMessage {
-  type: "trace" | "final";
+  type: "process" | "final";
   agent: string;
   function?: string | null;
   content: string;

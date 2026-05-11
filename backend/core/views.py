@@ -13,7 +13,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
-from agents import AgentOrchestrator
+from agents.graph import TrendLogicGraph
 from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
 
@@ -133,10 +133,8 @@ def chat_message(request: HttpRequest) -> JsonResponse:
         source="chat_message",
         last_used_at=timezone.now(),
     )
-    trend_titles = list(
-        TrendingItem.objects.filter(visibility="public").order_by("-heat_score", "-created_at").values_list("title", flat=True)[:5]
-    )
-    messages = AgentOrchestrator().run(content, trend_titles)
+    result = TrendLogicGraph().run(content)
+    messages = result["messages"]
     for message in messages:
         ChatMessage.objects.create(
             session=session,

@@ -166,7 +166,7 @@ async function sendMessage() {
     sessionId.value = response.session_id;
     for (const message of response.messages) {
       chatEntries.value.push(
-        message.type === "trace"
+        message.type === "process"
           ? { id: crypto.randomUUID(), role: "assistant", content: message.content, trace: message }
           : { id: crypto.randomUUID(), role: "assistant", content: message.content }
       );
