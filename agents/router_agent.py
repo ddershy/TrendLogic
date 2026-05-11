@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .base_agent import BaseAgent
+from .llm_client import LLMClient
 
 ALLOWED_INTENTS = {
     "product_selection", #选品
@@ -30,7 +31,7 @@ NEXT_AGENT_MAP = {
     "out_of_scope": "final",
 }
 
-AGENT_PROMPT = (
+ROUTER_AGENT_PROMPT = (
 """
 你是一个分类决策Agent，负责判断用户输入的文本内容是否与电商运营相关，并识别用户的具体意图。你的任务是将用户的问题路由到最合适的后续Agent进行处理，并拒绝用户的无关话题。
 业务范围包括：
@@ -41,6 +42,8 @@ AGENT_PROMPT = (
 - 用户画像（user_profile）：帮助用户分析目标用户的画像和需求。
 - 用户召回（recall_strategy）：提供用户召回的策略建议，帮助用户提升用户留存和复购。
 - 平台策略（platform_strategy）：提供针对不同电商平台（如淘宝、京东、TikTok等）的运营策略建议。
+而"user_visible_trace":中返回的是你认为可以给用户看到的内容，也就是正在分析的这个问题的意图和相关信息，帮助用户理解你是如何判断的，以及为什么要路由到这个Agent的。
+
 
 如如果用户只是闲聊、问天气、写代码、讲故事、学习无关知识，不涉及上述任何一个业务目标，请判断为“out_of_scope”，并拒绝继续分派给后续Agent，避免给出偏题建议。+
 
@@ -77,7 +80,7 @@ class RouterAgent(BaseAgent):
     """
     name = "分类决策Agent"
 
-    INTENT_KEYWORDS = { #用于辅助判断用户意图的关键词列表
+    INTENT_KEYWORDS = {
         "product_selection": ["选品", "商品", "爆品", "卖什么", "类目", "货源", "上新"],
         "traffic_analysis": ["流量", "趋势", "热度", "搜索", "曝光", "转化"],
         "content_advice": ["带货", "短视频", "笔记", "种草", "脚本", "内容", "小红书", "抖音"],
@@ -85,9 +88,23 @@ class RouterAgent(BaseAgent):
         "platform_strategy": ["淘宝", "天猫", "京东", "TikTok", "Amazon", "亚马逊", "拼多多"],
     }
 
+    llm_client = LLMClient()
+
+    def __init__(self, llm_client: LLMClient) -> None:
+        self.llm_client = llm_client
+
     def run(self, user_input: str) -> RouterDecision:
-        """
-        根据用户输入的文本内容判断用户的意图，并将问题路由到相应的其余Agent进行处理。
-        """
-        # 简单的关键词匹配逻辑，实际可以替换成更复杂的模型
-        
+        messages = [
+               {"role": "system","content": ROUTER_AGENT_PROMPT},
+               {"role": "user","content": user_input},
+        ]
+        result = self.llm_client.chat_json(messages)
+
+        return RouterDecision(
+            in_scope=result.get("in_scope", False),
+            intent=result.get("intent", "out_of_scope"),
+            confidence=result.get("confidence", 0.0),
+            next_agent=result.get("next_agent", None),
+            reason=result.get("reason", ""),
+            user_visible_trace=result.get("user_visible_trace", "")
+            )
