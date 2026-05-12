@@ -21,6 +21,18 @@ class Command(BaseCommand):
             if "user_transcript" not in columns:
                 cursor.execute("ALTER TABLE core_chatsession ADD COLUMN user_transcript text NOT NULL DEFAULT ''")
                 self.stdout.write(self.style.SUCCESS("Added core_chatsession.user_transcript"))
+            if "assistant_transcript" not in columns:
+                cursor.execute("ALTER TABLE core_chatsession ADD COLUMN assistant_transcript text NOT NULL DEFAULT ''")
+                self.stdout.write(self.style.SUCCESS("Added core_chatsession.assistant_transcript"))
+            if "session_summary" not in columns:
+                cursor.execute("ALTER TABLE core_chatsession ADD COLUMN session_summary text NOT NULL DEFAULT ''")
+                self.stdout.write(self.style.SUCCESS("Added core_chatsession.session_summary"))
+            if "trace_summary" not in columns:
+                cursor.execute("ALTER TABLE core_chatsession ADD COLUMN trace_summary text NOT NULL DEFAULT ''")
+                self.stdout.write(self.style.SUCCESS("Added core_chatsession.trace_summary"))
+            if "recent_interactions" not in columns:
+                cursor.execute("ALTER TABLE core_chatsession ADD COLUMN recent_interactions text NOT NULL DEFAULT '[]'")
+                self.stdout.write(self.style.SUCCESS("Added core_chatsession.recent_interactions"))
             if "message_count" not in columns:
                 cursor.execute("ALTER TABLE core_chatsession ADD COLUMN message_count integer NOT NULL DEFAULT 0")
                 self.stdout.write(self.style.SUCCESS("Added core_chatsession.message_count"))

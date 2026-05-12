@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { api, setToken } from "./api/client";
-import type { AgentMessage, ChatSessionSummary, RecallCandidate, TrendingItem, User, UserInsight } from "./types";
+import type { AgentMessage, ChatSessionSummary, RecallCandidate, TrendingItem, User, UserInsight, UserMemoryProfile } from "./types";
 
-type ViewName = "chat" | "trending" | "user-insights" | "recall";
+type ViewName = "chat" | "trending" | "user-insights" | "memory" | "recall";
 type AuthMode = "login" | "register";
 
 interface ChatEntry {
@@ -11,6 +11,18 @@ interface ChatEntry {
   role: "user" | "assistant";
   content: string;
   trace?: AgentMessage;
+}
+
+interface MemoryDraft {
+  short_term_summary: string;
+  long_term_summary: string;
+  preferences_json: string;
+  negative_preferences_text: string;
+  business_needs_text: string;
+  behavior_notes_text: string;
+  recall_signals_json: string;
+  tags_text: string;
+  confidence: number;
 }
 
 const user = ref<User | null>(null);
@@ -47,6 +59,13 @@ const trendRefreshing = ref(false);
 const trendError = ref("");
 
 const insights = ref<UserInsight[]>([]);
+const selectedMemoryUserId = ref("");
+const activeMemory = ref<UserMemoryProfile | null>(null);
+const memoryDraft = ref<MemoryDraft>(emptyMemoryDraft());
+const memoryLoading = ref(false);
+const memorySaving = ref(false);
+const memoryError = ref("");
+const memoryStatus = ref("");
 const recallItems = ref<RecallCandidate[]>([]);
 const recallMessage = ref("");
 const adminError = ref("");
@@ -55,10 +74,12 @@ const navItems = computed(() => [
   { key: "chat" as const, label: "智能运营台", adminOnly: false },
   { key: "trending" as const, label: "最新爆品", adminOnly: false },
   { key: "user-insights" as const, label: "用户洞察", adminOnly: true },
+  { key: "memory" as const, label: "记忆档案", adminOnly: true },
   { key: "recall" as const, label: "一键召回", adminOnly: true }
 ]);
 
 const visibleNavItems = computed(() => navItems.value.filter((item) => !item.adminOnly || user.value?.role === "admin"));
+const selectedMemoryUser = computed(() => insights.value.find((item) => item.user_id === selectedMemoryUserId.value) ?? null);
 const visibleChatEntries = computed(() =>
   chatLoading.value
     ? [
@@ -271,6 +292,89 @@ async function loadInsights() {
   }
 }
 
+async function loadMemoryModule() {
+  if (user.value?.role !== "admin") return;
+  memoryError.value = "";
+  try {
+    if (!insights.value.length) {
+      await loadInsights();
+    }
+    if (!selectedMemoryUserId.value && insights.value.length) {
+      selectedMemoryUserId.value = insights.value[0].user_id;
+    }
+    if (selectedMemoryUserId.value) {
+      await loadSelectedMemory();
+    }
+  } catch (error) {
+    memoryError.value = error instanceof Error ? error.message : "记忆档案加载失败";
+  }
+}
+
+async function selectMemoryUser(userId: string) {
+  selectedMemoryUserId.value = userId;
+  await loadSelectedMemory();
+}
+
+async function loadSelectedMemory() {
+  if (!selectedMemoryUserId.value) return;
+  memoryLoading.value = true;
+  memoryError.value = "";
+  memoryStatus.value = "";
+  try {
+    const response = await api.getUserMemory(selectedMemoryUserId.value);
+    activeMemory.value = response.memory;
+    fillMemoryDraft(response.memory);
+  } catch (error) {
+    memoryError.value = error instanceof Error ? error.message : "记忆档案加载失败";
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function saveMemory() {
+  if (!selectedMemoryUserId.value) return;
+  memorySaving.value = true;
+  memoryError.value = "";
+  memoryStatus.value = "";
+  try {
+    const response = await api.updateUserMemory(selectedMemoryUserId.value, {
+      short_term_summary: memoryDraft.value.short_term_summary,
+      long_term_summary: memoryDraft.value.long_term_summary,
+      preferences: parseJson(memoryDraft.value.preferences_json, {}),
+      negative_preferences: splitLines(memoryDraft.value.negative_preferences_text),
+      business_needs: splitLines(memoryDraft.value.business_needs_text),
+      behavior_notes: splitLines(memoryDraft.value.behavior_notes_text),
+      recall_signals: parseJson(memoryDraft.value.recall_signals_json, []),
+      tags: splitTags(memoryDraft.value.tags_text),
+      confidence: memoryDraft.value.confidence
+    });
+    activeMemory.value = response.memory;
+    fillMemoryDraft(response.memory);
+    memoryStatus.value = "记忆档案已保存";
+  } catch (error) {
+    memoryError.value = error instanceof Error ? error.message : "保存失败，请检查 JSON 格式";
+  } finally {
+    memorySaving.value = false;
+  }
+}
+
+async function summarizeSelectedMemory() {
+  if (!selectedMemoryUserId.value) return;
+  memorySaving.value = true;
+  memoryError.value = "";
+  memoryStatus.value = "";
+  try {
+    const response = await api.summarizeUserMemory(selectedMemoryUserId.value);
+    activeMemory.value = response.memory;
+    fillMemoryDraft(response.memory);
+    memoryStatus.value = "已根据最近会话更新长期记忆";
+  } catch (error) {
+    memoryError.value = error instanceof Error ? error.message : "生成长期记忆失败";
+  } finally {
+    memorySaving.value = false;
+  }
+}
+
 async function loadRecall() {
   if (user.value?.role !== "admin") return;
   adminError.value = "";
@@ -286,6 +390,7 @@ async function switchView(view: ViewName) {
   if (view === "trending") await loadTrending();
   if (view === "chat") await loadChatSessions();
   if (view === "user-insights") await loadInsights();
+  if (view === "memory") await loadMemoryModule();
   if (view === "recall") await loadRecall();
 }
 
@@ -307,6 +412,51 @@ function splitTags(value: string) {
     .split(/[,，]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toLines(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).join("\n") : "";
+}
+
+function parseJson(value: string, fallback: unknown) {
+  const text = value.trim();
+  if (!text) return fallback;
+  return JSON.parse(text);
+}
+
+function emptyMemoryDraft(): MemoryDraft {
+  return {
+    short_term_summary: "",
+    long_term_summary: "",
+    preferences_json: "{}",
+    negative_preferences_text: "",
+    business_needs_text: "",
+    behavior_notes_text: "",
+    recall_signals_json: "[]",
+    tags_text: "",
+    confidence: 0.7
+  };
+}
+
+function fillMemoryDraft(memory: UserMemoryProfile) {
+  memoryDraft.value = {
+    short_term_summary: memory.short_term_summary,
+    long_term_summary: memory.long_term_summary,
+    preferences_json: JSON.stringify(memory.preferences ?? {}, null, 2),
+    negative_preferences_text: toLines(memory.negative_preferences),
+    business_needs_text: toLines(memory.business_needs),
+    behavior_notes_text: toLines(memory.behavior_notes),
+    recall_signals_json: JSON.stringify(memory.recall_signals ?? [], null, 2),
+    tags_text: (memory.tags ?? []).join(", "),
+    confidence: memory.confidence
+  };
 }
 
 function groupChatEntries(entries: ChatEntry[]) {
@@ -506,6 +656,61 @@ function groupChatEntries(entries: ChatEntry[]) {
             <span>{{ item.summary || "暂无摘要" }}</span>
             <span>交互 {{ item.interaction_frequency }}</span>
           </article>
+        </div>
+      </section>
+
+      <section v-if="currentView === 'memory'" class="page">
+        <div class="pageTitle">
+          <div>
+            <h1>记忆档案</h1>
+            <p>以用户为单位维护短期记忆、长期记忆、偏好、负向偏好和经营需求。</p>
+          </div>
+          <button class="ghostButton" :disabled="memoryLoading" @click="loadMemoryModule">刷新</button>
+        </div>
+        <p v-if="memoryError" class="inlineError">{{ memoryError }}</p>
+        <p v-if="memoryStatus" class="inlineSuccess">{{ memoryStatus }}</p>
+        <div class="memoryGrid">
+          <aside class="memoryUserList">
+            <button
+              v-for="item in insights"
+              :key="item.user_id"
+              type="button"
+              :class="selectedMemoryUserId === item.user_id ? 'memoryUser active' : 'memoryUser'"
+              @click="selectMemoryUser(item.user_id)"
+            >
+              <strong>{{ item.display_name }}</strong>
+              <span>{{ item.account_id }}</span>
+            </button>
+            <div v-if="!insights.length" class="historyEmpty">暂无用户数据。</div>
+          </aside>
+
+          <form class="memoryEditor" @submit.prevent="saveMemory">
+            <div class="memoryEditorHeader">
+              <div>
+                <strong>{{ selectedMemoryUser?.display_name || "请选择用户" }}</strong>
+                <span>{{ activeMemory ? `可信度 ${Math.round(activeMemory.confidence * 100)}%` : "尚未加载记忆" }}</span>
+              </div>
+              <button class="ghostButton" type="button" :disabled="!selectedMemoryUserId || memorySaving" @click="summarizeSelectedMemory">
+                生成长期记忆
+              </button>
+            </div>
+
+            <label>短期记忆摘要<textarea v-model="memoryDraft.short_term_summary" /></label>
+            <label>长期记忆摘要<textarea v-model="memoryDraft.long_term_summary" /></label>
+            <label>用户偏好 JSON<textarea v-model="memoryDraft.preferences_json" /></label>
+            <label>负向偏好<textarea v-model="memoryDraft.negative_preferences_text" placeholder="每行一条" /></label>
+            <label>经营需求<textarea v-model="memoryDraft.business_needs_text" placeholder="每行一条" /></label>
+            <label>行为记录<textarea v-model="memoryDraft.behavior_notes_text" placeholder="每行一条" /></label>
+            <label>召回信号 JSON<textarea v-model="memoryDraft.recall_signals_json" /></label>
+            <label>标签<input v-model="memoryDraft.tags_text" placeholder="美妆个护, 小红书, 低客单价" /></label>
+            <label>
+              可信度
+              <input v-model.number="memoryDraft.confidence" type="number" min="0" max="1" step="0.01" />
+            </label>
+            <button class="primaryButton" :disabled="!selectedMemoryUserId || memorySaving">
+              {{ memorySaving ? "保存中" : "保存记忆档案" }}
+            </button>
+          </form>
         </div>
       </section>
 

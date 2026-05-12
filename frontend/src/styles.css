@@ -294,6 +294,12 @@ textarea {
   font-size: 13px;
 }
 
+.inlineSuccess {
+  color: #0f766e;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
 .chatPage {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -572,6 +578,56 @@ textarea {
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 }
 
+.memoryGrid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.memoryUserList {
+  align-self: start;
+  display: grid;
+  gap: 9px;
+}
+
+.memoryUser {
+  border: 1px solid #d9e3dd;
+  background: #ffffff;
+  color: #30403b;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.memoryUser span,
+.memoryEditorHeader span {
+  color: #66716d;
+  font-size: 12px;
+}
+
+.memoryUser.active {
+  border-color: #0f766e;
+  background: #e9f7f3;
+}
+
+.memoryEditor {
+  background: #ffffff;
+  border: 1px solid #dfe7e2;
+  border-radius: 8px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.memoryEditorHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .trendCard {
   background: #ffffff;
   border: 1px solid #dfe7e2;
@@ -675,6 +731,10 @@ textarea {
   .chatWorkspace,
   .contentGrid,
   .insightRow {
+    grid-template-columns: 1fr;
+  }
+
+  .memoryGrid {
     grid-template-columns: 1fr;
   }
 

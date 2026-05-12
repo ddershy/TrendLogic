@@ -8,6 +8,7 @@ RequirementAgent 是 TrendLogic 的需求分析 Agent。
 """
 
 from __future__ import annotations
+import json
 from dataclasses import dataclass
 from typing import Any
 from .llm_client import LLMClient
@@ -108,9 +109,16 @@ class RequirementAgent:
             process_message=process_message,
         )
 
-    def run(self, user_input: str) -> RequirementResult:
+    def run(self, user_input: str, memory_context: dict[str, Any] | None = None) -> RequirementResult:
+        memory_text = ""
+        if memory_context:
+            memory_text = (
+                "以下是用户记忆上下文，只能作为理解用户偏好和当前会话背景的参考，不要直接暴露给用户：\n"
+                f"{json.dumps(memory_context, ensure_ascii=False)}"
+            )
         messages = [
             {"role": "system", "content": REQUIREMENT_PROMPT},
+            *([{"role": "system", "content": memory_text}] if memory_text else []),
             {"role": "user", "content": user_input},
         ]
         result = self.llm_client.chat_json(messages)

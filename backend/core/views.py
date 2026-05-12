@@ -14,8 +14,8 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from agents.graph import TrendLogicGraph
-from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
+from memory.service import MemoryService
 
 from .models import (
     ChatSession,
@@ -69,19 +69,12 @@ def register(request: HttpRequest) -> JsonResponse:
         interest_weights={tag: 0.45 for tag in preferred_categories + preferred_platforms},
     )
     if preferred_categories or preferred_platforms or payload.get("business_focus"):
-        UserMemory.objects.create(
-            user=user,
-            memory_type="preference",
-            memory_scope="user",
-            title="注册时填写的初始偏好",
-            content=json.dumps(user.preferences, ensure_ascii=False),
-            summary="用户注册时提供的领域、平台和经营方向偏好。",
-            tags=preferred_categories + preferred_platforms,
-            importance=0.65,
-            confidence=0.8,
-            source="registration",
-            last_used_at=timezone.now(),
-        )
+        memory = MemoryService().get_or_create_memory(user)
+        memory.preferences = user.preferences
+        memory.tags = sorted(set(preferred_categories + preferred_platforms))
+        memory.confidence = 0.8
+        memory.last_used_at = timezone.now()
+        memory.save(update_fields=["preferences", "tags", "confidence", "last_used_at", "updated_at"])
     return JsonResponse(auth_response(user))
 
 
@@ -117,24 +110,20 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     if not content:
         return error("Message cannot be empty", 400)
     session = get_or_create_session(user, payload.get("session_id"), content)
-    append_user_input_to_session(session, content)
-    UserMemory.objects.create(
+    memory_service = MemoryService()
+    memory_context = memory_service.load_context(user, session)
+    result = TrendLogicGraph().run(content, memory_context.to_dict())
+    messages = result["messages"]
+    final_message = next((message["content"] for message in reversed(messages) if message.get("type") == "final"), "")
+    trace_messages = [message for message in messages if message.get("type") == "process"]
+    memory_service.record_interaction(
         user=user,
         session=session,
-        memory_type="short_term",
-        memory_scope="session",
-        title="用户本轮输入",
-        content=content,
-        summary=content[:160],
-        tags=UserProfileAgent().extract_tags(content),
-        importance=0.45,
-        confidence=0.85,
-        source="chat_message",
-        last_used_at=timezone.now(),
+        user_message=content,
+        assistant_message=final_message,
+        trace_messages=trace_messages,
+        memory_candidates=result.get("memory_candidates", []),
     )
-    result = TrendLogicGraph().run(content)
-    messages = result["messages"]
-    update_profile_from_text(user, content)
     return JsonResponse({"session_id": session.id, "messages": messages})
 
 
@@ -340,30 +329,39 @@ def recall_generate(request: HttpRequest) -> JsonResponse:
         generated_message=generated["message"],
         created_by=admin,
     )
-    UserMemory.objects.create(
+    MemoryService().append_memory_list(
         user=user,
-        memory_type="recall_signal",
-        memory_scope="user",
-        title="召回信号",
-        content=generated["message"],
-        summary=generated["reason"],
-        tags=generated["matched_trends"],
-        importance=generated["recall_score"],
-        confidence=0.78,
-        source="recall_agent",
-        last_used_at=timezone.now(),
+        field_name="recall_signals",
+        item={
+            "message": generated["message"],
+            "reason": generated["reason"],
+            "matched_trends": generated["matched_trends"],
+            "recall_score": generated["recall_score"],
+            "created_at": iso(timezone.now()),
+        },
     )
     return JsonResponse({"user_id": user.id, **generated})
 
 
+@csrf_exempt
 def user_memory(request: HttpRequest, user_id: str) -> JsonResponse:
     user = current_user(request)
     if not user:
         return error("Invalid or expired token", 401)
     if user.role != "admin" and user.id != user_id:
         return error("Cannot access this memory", 403)
-    memories = UserMemory.objects.filter(user_id=user_id).exclude(status="deleted").order_by("-importance", "-updated_at")[:100]
-    return JsonResponse({"user_id": user_id, "memories": [serialize_memory(memory) for memory in memories]})
+    target = User.objects.filter(id=user_id).first()
+    if not target:
+        return error("User not found", 404)
+    memory_service = MemoryService()
+    memory = memory_service.get_or_create_memory(target)
+    if request.method == "GET":
+        return JsonResponse({"user_id": user_id, "memory": serialize_memory(memory)})
+    if request.method == "PUT":
+        payload = read_json(request)
+        memory_service.update_memory_from_payload(memory, payload)
+        return JsonResponse({"user_id": user_id, "memory": serialize_memory(memory)})
+    return method_not_allowed()
 
 
 def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
@@ -378,7 +376,6 @@ def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
 
     profile = getattr(target, "profile", None)
     recent_sessions = ChatSession.objects.filter(user=target).order_by("-updated_at")[:10]
-    memories = UserMemory.objects.filter(user=target).exclude(status="deleted").order_by("-importance", "-updated_at")[:100]
     recall_records = RecallRecord.objects.filter(user=target).order_by("-created_at")[:20]
     return JsonResponse(
         {
@@ -386,7 +383,7 @@ def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
             "profile": serialize_user_insight(target, profile),
             "recent_sessions": [serialize_session(session) for session in recent_sessions],
             "recent_conversations": [serialize_session_detail(session) for session in recent_sessions],
-            "memories": [serialize_memory(memory) for memory in memories],
+            "memory": serialize_memory(MemoryService().get_or_create_memory(target)),
             "recall_records": [serialize_recall_record(record) for record in recall_records],
         }
     )
@@ -406,19 +403,11 @@ def summarize_memory(request: HttpRequest, user_id: str) -> JsonResponse:
     summary = "；".join(
         session.user_transcript[:160] for session in reversed(list(recent_sessions)) if session.user_transcript
     ) or "暂无足够对话形成长期记忆。"
-    memory = UserMemory.objects.create(
-        user=target,
-        memory_type="long_term",
-        memory_scope="user",
-        title="长期记忆摘要",
-        content=summary,
-        summary=summary[:240],
-        tags=[],
-        importance=0.75,
-        confidence=0.65,
-        source="manual_summarize",
-        last_used_at=timezone.now(),
-    )
+    memory = MemoryService().get_or_create_memory(target)
+    memory.long_term_summary = summary
+    memory.confidence = max(memory.confidence or 0, 0.65)
+    memory.last_used_at = timezone.now()
+    memory.save(update_fields=["long_term_summary", "confidence", "last_used_at", "updated_at"])
     return JsonResponse({"status": "ok", "memory": serialize_memory(memory)})
 
 
@@ -470,44 +459,6 @@ def get_or_create_session(user: User, session_id: str | None, first_message: str
     return ChatSession.objects.create(user=user, title=first_message[:36] or "新的运营咨询")
 
 
-def append_user_input_to_session(session: ChatSession, content: str) -> None:
-    now = timezone.now()
-    line = f"[{now:%Y-%m-%d %H:%M:%S}] {content}"
-    session.user_transcript = f"{session.user_transcript}\n{line}".strip()
-    session.message_count = (session.message_count or 0) + 1
-    session.last_message_at = now
-    if session.title == "新的运营咨询":
-        session.title = content[:36] or session.title
-    session.save(update_fields=["user_transcript", "message_count", "last_message_at", "title", "updated_at"])
-
-
-def update_profile_from_text(user: User, content: str) -> None:
-    profile, _ = UserProfile.objects.get_or_create(user=user)
-    weights = dict(profile.interest_weights or {})
-    tags = UserProfileAgent().extract_tags(content)
-    for tag in tags:
-        weights[tag] = min(float(weights.get(tag, 0.2)) + 0.08, 1.0)
-    profile.interest_weights = weights
-    profile.interaction_frequency = (profile.interaction_frequency or 0) + 1
-    profile.last_active_at = timezone.now()
-    if tags:
-        profile.summary = f"用户最近关注：{', '.join(sorted(set(tags)))}。"
-        UserMemory.objects.create(
-            user=user,
-            memory_type="preference",
-            memory_scope="user",
-            title="对话中识别到的偏好",
-            content=content,
-            summary=f"用户表达了与 {', '.join(sorted(set(tags)))} 相关的兴趣。",
-            tags=sorted(set(tags)),
-            importance=0.6,
-            confidence=0.72,
-            source="profile_agent",
-            last_used_at=timezone.now(),
-        )
-    profile.save()
-
-
 def seed_default_categories() -> None:
     default_categories = [
         ("美妆个护", "美妆、护肤、香氛、个护清洁"),
@@ -552,7 +503,14 @@ def serialize_session(session: ChatSession) -> dict:
 
 
 def serialize_session_detail(session: ChatSession) -> dict:
-    return {**serialize_session(session), "user_transcript": session.user_transcript}
+    return {
+        **serialize_session(session),
+        "user_transcript": session.user_transcript,
+        "assistant_transcript": session.assistant_transcript,
+        "session_summary": session.session_summary,
+        "trace_summary": session.trace_summary,
+        "recent_interactions": session.recent_interactions,
+    }
 
 
 def serialize_trending_item(item: TrendingItem) -> dict:
@@ -604,18 +562,15 @@ def serialize_memory(memory: UserMemory) -> dict:
     return {
         "id": memory.id,
         "user_id": memory.user_id,
-        "session_id": memory.session_id,
-        "memory_type": memory.memory_type,
-        "memory_scope": memory.memory_scope,
-        "title": memory.title,
-        "content": memory.content,
-        "summary": memory.summary,
+        "short_term_summary": memory.short_term_summary,
+        "long_term_summary": memory.long_term_summary,
+        "preferences": memory.preferences,
+        "negative_preferences": memory.negative_preferences,
+        "business_needs": memory.business_needs,
+        "behavior_notes": memory.behavior_notes,
+        "recall_signals": memory.recall_signals,
         "tags": memory.tags,
-        "importance": memory.importance,
         "confidence": memory.confidence,
-        "decay_score": memory.decay_score,
-        "source": memory.source,
-        "status": memory.status,
         "last_used_at": iso(memory.last_used_at) if memory.last_used_at else None,
         "created_at": iso(memory.created_at),
         "updated_at": iso(memory.updated_at),

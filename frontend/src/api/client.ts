@@ -6,7 +6,8 @@ import type {
   RecallCandidate,
   TrendingItem,
   User,
-  UserInsight
+  UserInsight,
+  UserMemoryProfile
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
@@ -92,6 +93,17 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   userInsights: () => request<UserInsight[]>("/admin/user-insights"),
+  getUserMemory: (user_id: string) => request<{ user_id: string; memory: UserMemoryProfile }>(`/users/${user_id}/memory`),
+  updateUserMemory: (user_id: string, payload: Partial<UserMemoryProfile>) =>
+    request<{ user_id: string; memory: UserMemoryProfile }>(`/users/${user_id}/memory`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  summarizeUserMemory: (user_id: string) =>
+    request<{ status: string; memory: UserMemoryProfile }>(`/users/${user_id}/memory/summarize`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
   recallCandidates: () => request<RecallCandidate[]>("/recall/candidates"),
   generateRecall: (user_id: string) =>
     request<{ message: string; recall_score: number; matched_trends: string[]; reason: string }>("/recall/generate", {

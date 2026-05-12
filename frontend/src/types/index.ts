@@ -69,6 +69,23 @@ export interface UserInsight {
   last_active_at: string | null;
 }
 
+export interface UserMemoryProfile {
+  id: string;
+  user_id: string;
+  short_term_summary: string;
+  long_term_summary: string;
+  preferences: Record<string, unknown>;
+  negative_preferences: string[];
+  business_needs: string[];
+  behavior_notes: string[];
+  recall_signals: Array<Record<string, unknown>>;
+  tags: string[];
+  confidence: number;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RecallCandidate {
   user_id: string;
   display_name: string;

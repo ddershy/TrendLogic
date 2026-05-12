@@ -44,11 +44,13 @@ class UserProfileAdmin(admin.ModelAdmin):
 class ChatSessionAdmin(admin.ModelAdmin):
     list_display = ("title", "user", "message_count", "last_message_at", "created_at", "updated_at")
     list_filter = ("last_message_at", "created_at", "updated_at")
-    search_fields = ("title", "user_transcript", "user__display_name", "user__account_id")
+    search_fields = ("title", "user_transcript", "assistant_transcript", "session_summary", "user__display_name", "user__account_id")
     readonly_fields = ("id", "message_count", "last_message_at", "created_at", "updated_at")
     fieldsets = (
         ("归属", {"fields": ("id", "user", "title")}),
-        ("用户会话文本", {"fields": ("user_transcript", "message_count", "last_message_at")}),
+        ("会话文本", {"fields": ("user_transcript", "assistant_transcript", "recent_interactions")}),
+        ("摘要", {"fields": ("session_summary", "trace_summary")}),
+        ("计数", {"fields": ("message_count", "last_message_at")}),
         ("时间", {"fields": ("created_at", "updated_at")}),
     )
 
@@ -87,22 +89,17 @@ class UploadedDocumentAdmin(admin.ModelAdmin):
 
 @admin.register(UserMemory)
 class UserMemoryAdmin(admin.ModelAdmin):
-    list_display = ("title", "user", "memory_type", "memory_scope", "status", "importance", "confidence", "decay_score", "last_used_at")
-    list_filter = ("memory_type", "memory_scope", "status", "source", "last_used_at", "created_at")
-    search_fields = ("title", "content", "summary", "tags", "user__display_name", "user__account_id", "session__title")
+    list_display = ("user", "confidence", "last_used_at", "updated_at")
+    list_filter = ("last_used_at", "created_at", "updated_at")
+    search_fields = ("user__display_name", "user__account_id", "short_term_summary", "long_term_summary", "tags")
     readonly_fields = ("id", "created_at", "updated_at")
-    list_editable = ("status", "importance", "confidence", "decay_score")
     fieldsets = (
-        ("归属", {"fields": ("id", "user", "session")}),
-        ("分类", {"fields": ("memory_type", "memory_scope", "status", "source")}),
-        ("内容", {"fields": ("title", "content", "summary", "tags")}),
-        ("评分", {"fields": ("importance", "confidence", "decay_score", "last_used_at")}),
+        ("归属", {"fields": ("id", "user")}),
+        ("记忆摘要", {"fields": ("short_term_summary", "long_term_summary")}),
+        ("偏好与需求", {"fields": ("preferences", "negative_preferences", "business_needs", "behavior_notes", "recall_signals", "tags")}),
+        ("状态", {"fields": ("confidence", "last_used_at")}),
         ("时间", {"fields": ("created_at", "updated_at")}),
     )
-
-    @admin.display(description="摘要")
-    def short_summary(self, obj: UserMemory) -> str:
-        return obj.summary[:64] + ("..." if len(obj.summary) > 64 else "")
 
 
 @admin.register(RecallRecord)
