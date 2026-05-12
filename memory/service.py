@@ -69,7 +69,7 @@ class MemoryService:
         )
 
     def _resolve_user(self, user: Any):
-        from backend.core.models import User
+        from core.models import User
 
         if isinstance(user, User):
             return user
@@ -79,7 +79,7 @@ class MemoryService:
         return resolved
 
     def _resolve_session(self, session: Any | None, user: Any):
-        from backend.core.models import ChatSession
+        from core.models import ChatSession
 
         if session is None:
             return None
@@ -88,12 +88,12 @@ class MemoryService:
         return ChatSession.objects.filter(id=str(session), user=user).first()
 
     def _get_memory(self, user: Any):
-        from backend.core.models import UserMemory
+        from core.models import UserMemory
 
         return UserMemory.objects.filter(user=user).first()
 
     def get_or_create_memory(self, user: Any):
-        from backend.core.models import UserMemory
+        from core.models import UserMemory
 
         user = self._resolve_user(user)
         memory, _ = UserMemory.objects.get_or_create(user=user)
@@ -126,6 +126,7 @@ class MemoryService:
             "user_message": user_message,
             "assistant_message": assistant_message,
             "trace_messages": [self._trace_text(trace) for trace in trace_messages if self._trace_text(trace)],
+            "memory_candidates": [candidate.to_dict() for candidate in candidates],
         }
 
         session.user_transcript = _append_transcript(session.user_transcript, now, user_message)
@@ -155,19 +156,6 @@ class MemoryService:
         )
 
         self._update_short_term_profile(user, session, user_message, candidates)
-        if candidates:
-            self.apply_update_plan(
-                self.updater.build_plan(
-                    user_id=user.id,
-                    session_id=session.id,
-                    memory_context=self.load_context(user, session).to_dict(),
-                    user_transcript=session.user_transcript,
-                    assistant_transcript=session.assistant_transcript,
-                    session_summary=session.session_summary,
-                    candidates=candidates,
-                )
-            )
-
         if compressed:
             self._sync_short_term_summary(user, session.session_summary)
         return self.load_context(user, session)
@@ -177,6 +165,7 @@ class MemoryService:
         session = self._resolve_session(session, user)
         if not session:
             raise ValueError("Session not found when building long-term memory plan.")
+        candidates = self._candidates_from_session(session)
         return self.updater.build_plan(
             user_id=user.id,
             session_id=session.id,
@@ -184,7 +173,7 @@ class MemoryService:
             user_transcript=session.user_transcript,
             assistant_transcript=session.assistant_transcript,
             session_summary=session.session_summary,
-            candidates=[],
+            candidates=candidates,
         )
 
     def update_long_term(self, *, user: Any, session: Any) -> MemoryUpdatePlan:
@@ -193,7 +182,7 @@ class MemoryService:
         return plan
 
     def apply_update_plan(self, plan: MemoryUpdatePlan) -> None:
-        from backend.core.models import User, UserProfile
+        from core.models import User, UserProfile
 
         user = User.objects.filter(id=plan.user_id).first()
         if not user:
@@ -272,7 +261,7 @@ class MemoryService:
         candidates: list[MemoryCandidate],
     ) -> None:
         from agents.user_profile_agent import UserProfileAgent
-        from backend.core.models import UserProfile
+        from core.models import UserProfile
 
         memory = self.get_or_create_memory(user)
         profile, _ = UserProfile.objects.get_or_create(user=user)
@@ -313,6 +302,15 @@ class MemoryService:
             evidence=str(value.get("evidence") or ""),
             tags=_as_list(value.get("tags")),
         )
+
+    def _candidates_from_session(self, session: Any) -> list[MemoryCandidate]:
+        candidates: list[MemoryCandidate] = []
+        for interaction in session.recent_interactions or []:
+            for raw_candidate in interaction.get("memory_candidates", []) if isinstance(interaction, dict) else []:
+                candidate = self._normalize_candidate(raw_candidate)
+                if candidate.content:
+                    candidates.append(candidate)
+        return candidates
 
     @staticmethod
     def _trace_text(trace: dict) -> str:

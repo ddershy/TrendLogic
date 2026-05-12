@@ -3,6 +3,7 @@ import type {
   ChatResponse,
   ChatSessionHistory,
   ChatSessionSummary,
+  MemoryContext,
   RecallCandidate,
   TrendingItem,
   User,
@@ -85,6 +86,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  getMemoryContext: (session_id?: string | null) =>
+    request<{ memory_context: MemoryContext }>(
+      session_id ? `/memory/context?session_id=${encodeURIComponent(session_id)}` : "/memory/context"
+    ),
+  updateSessionMemory: (session_id: string) =>
+    request<{ status: string; memory: UserMemoryProfile; memory_context: MemoryContext; update_plan: Record<string, unknown> }>(
+      "/memory/session/update",
+      {
+        method: "POST",
+        body: JSON.stringify({ session_id })
+      }
+    ),
   listTrending: () => request<TrendingItem[]>("/trending"),
   listTrendingCategories: () => request<string[]>("/trending/categories"),
   createTrending: (payload: Partial<TrendingItem>) =>

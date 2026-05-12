@@ -30,9 +30,12 @@ REQUIREMENT_PROMPT = """
 - known_constraints：用户已经说明的限制条件
 
 判断规则：
-由你来判断目前的消息是否可以推断出用户的多数目标，则返回is_complete = true。
-如果信息不足，is_complete=false，并在 missing_fields 中列出缺失字段。
-由你来补全follow_up_question和process_message，要求内容自然且具有引导性，能够让用户清晰地理解需要补充哪些信息，以及为什么需要这些信息,但为了减少token消耗，精简输出。
+- 你必须综合“当前用户输入”和“用户记忆上下文/当前会话历史”，不要只看最后一句话。
+- 对选品/开店/运营建议类问题，核心字段是 target_platform、target_category、budget_range、target_audience。
+- 只有核心字段都已经从当前输入或会话历史中明确识别，才返回 is_complete=true，进入下一流程。
+- 如果只缺少 content_style、risk_preference、known_constraints 这类优化字段，不要反复追问，可以先进入下一流程。
+- 如果信息不足，missing_fields 只列最关键的 1-2 项，并提出一个自然追问。
+- process_message 要精简，说明已经识别到哪些信息，以及为什么继续或追问。
 
 
 你只能输出 JSON，不要输出 Markdown，不要解释。
@@ -90,16 +93,32 @@ class RequirementAgent:
 
         missing_fields = self._ensure_list(result.get("missing_fields"))
         is_complete = bool(result.get("is_complete", False))
-        # if len([value for key, value in normalized_profile.items() if key in {"target_platform", "target_category", "budget_range"} and value]) >= 2:
-        #     is_complete = True
+        core_fields = ["target_platform", "target_category", "budget_range", "target_audience"]
+        missing_core_fields = [field for field in core_fields if not normalized_profile.get(field)]
+        if missing_core_fields:
+            is_complete = False
+            missing_fields = _unique([*missing_core_fields, *missing_fields])[:2]
+        else:
+            is_complete = True
+            missing_fields = [
+                field
+                for field in missing_fields
+                if field in set(core_fields)
+            ][:1]
 
         follow_up_question = str(result.get("follow_up_question") or "").strip()
-        # if not is_complete and not follow_up_question:
-        #     follow_up_question = "为了更准确地分析，请先告诉我：你主要想在哪个平台销售？预算大概是多少？更关注什么类目？"
+        if not is_complete and not follow_up_question:
+            follow_up_question = self._build_follow_up_question(missing_fields)
+        if is_complete:
+            follow_up_question = ""
 
         process_message = str(result.get("process_message") or "").strip()
         if not process_message:
             process_message = "我正在整理你的需求信息，先确认平台、类目、预算和目标用户是否清晰。"
+        if is_complete and self._looks_like_follow_up(process_message):
+            process_message = "我已经整理完核心需求：平台、类目、预算和目标用户都足够清晰，可以进入下一步分析。"
+        if not is_complete and not self._looks_like_follow_up(process_message):
+            process_message = f"我已经整理出部分需求，但还缺少{self._field_label(missing_fields[0]) if missing_fields else '一个关键信息'}，需要先补充后再进入下一步。"
 
         return RequirementResult(
             is_complete=is_complete,
@@ -113,7 +132,8 @@ class RequirementAgent:
         memory_text = ""
         if memory_context:
             memory_text = (
-                "以下是用户记忆上下文，只能作为理解用户偏好和当前会话背景的参考，不要直接暴露给用户：\n"
+                "以下是用户记忆上下文和当前会话历史。你必须把它和最新用户输入合并理解；"
+                "不要因为最新一句话很短就忽略之前已经提供的信息，也不要直接暴露这些上下文给用户：\n"
                 f"{json.dumps(memory_context, ensure_ascii=False)}"
             )
         messages = [
@@ -132,3 +152,38 @@ class RequirementAgent:
         if isinstance(value, str) and value.strip(): # 字符串返回成单元素列表，前提是字符串不为空或不全是空格
             return [value.strip()]
         return []
+
+    @classmethod
+    def _build_follow_up_question(cls, missing_fields: list[str]) -> str:
+        if not missing_fields:
+            return "为了更准确地分析，请再补充一个关键信息。"
+        labels = [cls._field_label(field) for field in missing_fields[:2]]
+        return f"为了继续做选品分析，请先补充：{'、'.join(labels)}。"
+
+    @staticmethod
+    def _field_label(field: str) -> str:
+        labels = {
+            "target_platform": "目标平台",
+            "target_category": "商品类目",
+            "budget_range": "预算范围",
+            "target_audience": "目标用户群体",
+            "sales_goal": "销售目标",
+            "content_style": "内容形式",
+            "risk_preference": "风险偏好",
+            "known_constraints": "限制条件",
+        }
+        return labels.get(field, field)
+
+    @staticmethod
+    def _looks_like_follow_up(text: str) -> bool:
+        return any(word in text for word in ["缺少", "还缺", "还需要", "需要明确", "补充", "不明确"])
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result

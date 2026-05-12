@@ -1340,8 +1340,9 @@ RAG、用户画像、一键召回可以先设计接口和目录，后续逐步�
 - 如何运行；
 - 还有哪些待完成事项。
 
-## 数据库的补充
+## 数据库的修改
 
+### 第一次
 
 目前数据库设计需要修正。TrendLogic 的核心不是普通聊天系统，而是以用户为中心的电商运营 Agent 系统。请停止继续扩散散表设计，先重构数据模型为 User-Centric 架构。
 
@@ -1375,3 +1376,335 @@ RAG、用户画像、一键召回可以先设计接口和目录，后续逐步�
 12. 请先输出你准备修改哪些 model、schema、service、router 文件，然后再小步修改。不要一次性大规模重构无法检查。
 
 请按 Read → Plan → Modify → Test → Explain 的方式执行。
+
+
+### 第二次
+
+user memory这个表存在问题，现在看起来也是一条一条存储的，但实际上并不需要这样，设计的有一点太详尽了，我们对于用户记忆也应该按照以用户作区分，应该点进去是用户的信息，然后展示了长短期以及和偏好，以及还有我们不同agent的prompt也可以存储在这里，可以便于admin去修改关于他们prompt功能的描写，不用每次都去代码中修改。
+
+## 记忆模块的设计
+
+### 第一次
+
+
+现在开始为 TrendLogic 的 Agent 系统添加记忆模块。
+
+请注意：我不希望你一次性把所有代码写完。我希望你以“教学式开发”的方式带我一步一步实现，让我理解 memory、agent、backend、frontend 之间的关系。
+
+## 当前项目目录约定
+
+项目根目录下有四个核心目录：
+
+- memory/
+- agent/
+- backend/
+- frontend/
+
+请严格遵守这个目录边界。
+
+## 目录职责
+
+### memory/
+
+memory 是独立模块，负责用户记忆的生命周期管理。
+
+它负责：
+
+1. 读取用户记忆；
+2. 组装 memory_context；
+3. 记录每轮用户和 AI 的交互；
+4. 维护短期记忆；
+5. 在超过 10 轮对话后压缩短期记忆；
+6. 在会话结束后更新长期记忆；
+7. 更新 UserProfile 和 UserMemoryProfile；
+8. 后续预留 LanceDB / 向量记忆接口。
+
+memory 不应该依赖具体 Agent 的内部实现。
+
+### agent/
+
+agent 负责业务推理和任务执行。
+
+它负责：
+
+1. 分类决策；
+2. 需求分析；
+3. 选品咨询；
+4. 使用 memory_context 生成更个性化的回复；
+5. 返回 final_message、trace_messages 和可选 memory_candidates。
+
+agent 可以读取 memory_context，但不要直接写数据库，不要直接更新 UserProfile，也不要直接修改 UserMemoryProfile。
+
+
+
+
+现在开始为 TrendLogic 的 Agent 系统添加记忆模块。
+
+请注意：我不希望你一次性把所有代码写完。我希望你以“教学式开发”的方式带我一步一步实现，让我理解 memory、agent、backend、frontend 之间的关系。
+
+## 当前项目目录约定
+
+项目根目录下有四个核心目录：
+
+- memory/
+- agent/
+- backend/
+- frontend/
+
+请严格遵守这个目录边界。
+
+## 目录职责
+
+### memory/
+
+memory 是独立模块，负责用户记忆的生命周期管理。
+
+它负责：
+
+1. 读取用户记忆；
+2. 组装 memory_context；
+3. 记录每轮用户和 AI 的交互；
+4. 维护短期记忆；
+5. 在超过 10 轮对话后压缩短期记忆；
+6. 在会话结束后更新长期记忆；
+7. 更新 UserProfile 和 UserMemoryProfile；
+8. 后续预留 LanceDB / 向量记忆接口。
+
+memory 不应该依赖具体 Agent 的内部实现。
+
+### agent/
+
+agent 负责业务推理和任务执行。
+
+它负责：
+
+1. 分类决策；
+2. 需求分析；
+3. 选品咨询；
+4. 使用 memory_context 生成更个性化的回复；
+5. 返回 final_message、trace_messages 和可选 memory_candidates。
+
+agent 可以读取 memory_context，但不要直接写数据库，不要直接更新 UserProfile，也不要直接修改 UserMemoryProfile。
+
+
+## 记忆模块设计目标
+
+### 1. 短期记忆
+
+短期记忆默认保存最近 10 轮对话。
+
+每轮交互结束后，memory 模块自动记录：
+
+- user_message
+- assistant_message
+- trace_messages 可选摘要
+- message_count
+- last_message_at
+
+如果对话超过 10 轮，则使用一个简单 LLM 对较早内容进行压缩，更新：
+
+- ChatSession.session_summary
+- 或 UserMemoryProfile.short_term_summary
+
+### 2. 长期记忆
+
+长期记忆不需要每轮都更新。
+
+当一次完整会话结束后，使用一个中等级 LLM 读取：
+
+- 当前 UserProfile
+- 当前 UserMemoryProfile
+- 当前 ChatSession 的 user_transcript
+- 当前 ChatSession 的 assistant_transcript
+- 当前 session_summary
+
+然后让 LLM 判断：
+
+- 哪些用户偏好需要新增；
+- 哪些偏好需要更新；
+- 哪些偏好需要合并；
+- 哪些兴趣需要弱化；
+- 哪些负向偏好需要记录；
+- 哪些业务需求需要进入长期记忆；
+- 哪些内容可以作为召回信号。
+
+最终更新：
+
+- UserProfile
+- UserMemoryProfile
+
+### 3. Agent 如何使用 Memory
+
+agent 不直接管理 memory。
+
+agent 只接收 backend 传入的 memory_context，例如：
+
+```json
+{
+  "user_profile_summary": "用户主要关注小红书低成本美妆选品。",
+  "short_term_summary": "当前会话中用户正在咨询低预算选品。",
+  "long_term_summary": "用户长期偏好轻资产、低库存、可内容化展示的商品。",
+  "preferences": ["小红书", "美妆", "低成本试错"],
+  "negative_preferences": ["高库存", "高客单价"],
+  "business_needs": ["寻找适合小红书的美妆选品方向"],
+  "recall_signals": ["小红书美妆热点"]
+}
+```
+
+
+## 请你采用教学式开发方式
+
+不要一次性实现完整 memory 系统。
+
+每一步都必须按照以下格式输出：
+
+### 本阶段目标
+
+说明这一步要解决什么问题。
+
+### 设计解释
+
+解释为什么这样设计。
+
+### 文件计划
+
+说明会新增或修改哪些文件。
+
+### 代码实现
+
+只实现本阶段最小代码。
+
+### 核心代码讲解
+
+解释关键类、函数和字段。
+
+### 如何测试
+
+说明我应该怎么运行和验证。
+
+### 下一步
+
+说明下一阶段做什么，然后停下来等我确认。
+
+## 分阶段开发计划
+
+请按以下阶段一步一步执行。
+
+### Step 1：只做架构讲解，不写代码
+
+请先解释：
+
+1. memory、agent、backend、frontend 四个目录之间的关系；
+2. 为什么 memory 应该独立；
+3. 为什么 agent 只读 memory_context，不直接写数据库；
+4. backend 为什么负责协调 memory 和 agent；
+5. 当前最小闭环应该是什么。
+
+本阶段不要修改代码。
+
+### Step 2：设计 memory 模块目录
+
+请设计 memory/ 目录结构，例如：
+
+<pre class="overflow-visible! px-0!" data-start="3744" data-end="3877"><div class="relative w-full mt-4 mb-1"><div class=""><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-token-bg-elevated-secondary corner-superellipse/1.1 overflow-clip rounded-3xl lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>memory/</span><br/><span>├── __init__.py</span><br/><span>├── service.py</span><br/><span>├── schemas.py</span><br/><span>├── summarizer.py</span><br/><span>├── updater.py</span><br/><span>├── prompts.py</span><br/><span>└── vector_store.py</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></pre>
+
+解释每个文件的职责。
+
+本阶段只规划，不写复杂代码。
+
+### Step 3：实现 MemoryContext 和 MemoryUpdatePlan
+
+在 memory/schemas.py 中定义最小数据结构：
+
+* MemoryContext
+* MemoryCandidate
+* MemoryUpdatePlan
+
+要求使用 Pydantic 或项目当前适合的数据结构。
+
+本阶段只定义数据结构，不调用 LLM。
+
+### Step 4：实现 MemoryService.load_context()
+
+在 memory/service.py 中实现：
+
+* 根据 user 和 session 读取 UserProfile；
+* 读取 UserMemoryProfile；
+* 读取 ChatSession 的 session_summary；
+* 组装 MemoryContext；
+* 返回给 backend 或 graph.py 使用。
+
+本阶段不做写入，不做 LLM。
+
+### Step 5：让 backend 调用 MemoryService.load_context()
+
+在 chat 接口或 ChatService 中加入流程：
+
+<pre class="overflow-visible! px-0!" data-start="4409" data-end="4534"><div class="relative w-full mt-4 mb-1"><div class=""><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-token-bg-elevated-secondary corner-superellipse/1.1 overflow-clip rounded-3xl lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span>收到用户消息</span><br/><span>  ↓</span><br/><span>MemoryService.load_context(user, session)</span><br/><span>  ↓</span><br/><span>把 memory_context 放进 agent graph input</span><br/><span>  ↓</span><br/><span>调用 agent graph</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></pre>
+
+本阶段只让 agent 能看到 memory_context，不更新记忆。
+
+### Step 6：让 agent 使用 memory_context
+
+修改 agent/graph.py 或相关 Agent 节点：
+
+* AgentState 中增加 memory_context；
+* RouterAgent 可以不用 memory_context；
+* RequirementAgent 可以参考 short_term_summary；
+* ProductConsultantAgent 可以参考 preferences、negative_preferences、business_needs；
+* 输出时不要暴露内部真实推理，只返回 trace_messages 和 final_message。
+
+本阶段不写 memory。
+
+### Step 7：实现 MemoryService.record_interaction()
+
+每轮对话结束后，backend 调用：
+
+<pre class="overflow-visible! px-0!" data-start="4976" data-end="5205"><div class="relative w-full mt-4 mb-1"><div class=""><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-token-bg-elevated-secondary corner-superellipse/1.1 overflow-clip rounded-3xl lxnfua_clipPathFallback"><div class="pointer-events-none absolute inset-x-4 top-12 bottom-4"><div class="pointer-events-none sticky z-40 shrink-0 z-1!"><div class="sticky bg-token-border-light"></div></div></div><div class="relative"><div class=""><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><span class="ͼm">MemoryService</span><span class="ͼg">.</span><span>record_interaction(</span><br/><span></span><span class="ͼm">user</span><span class="ͼg">=</span><span class="ͼm">user</span><span>,</span><br/><span></span><span class="ͼm">session</span><span class="ͼg">=</span><span class="ͼm">session</span><span>,</span><br/><span></span><span class="ͼm">user_message</span><span class="ͼg">=</span><span class="ͼm">user_message</span><span>,</span><br/><span></span><span class="ͼm">assistant_message</span><span class="ͼg">=</span><span class="ͼm">final_message</span><span>,</span><br/><span></span><span class="ͼm">trace_messages</span><span class="ͼg">=</span><span class="ͼm">trace_messages</span><span>,</span><br/><span></span><span class="ͼm">memory_candidates</span><span class="ͼg">=</span><span class="ͼm">memory_candidates</span><span>,</span><br/><span>)</span></code></pre></div></div></div></div></div></div></div></div></div><div class=""><div class=""></div></div></div></div></div></pre>
+
+它负责更新：
+
+* ChatSession.user_transcript
+* ChatSession.assistant_transcript
+* ChatSession.message_count
+* ChatSession.last_message_at
+
+本阶段不调用 LLM，只做自动记录。
+
+### Step 8：实现短期记忆压缩
+
+当 message_count 超过 10 轮时：
+
+* 调用 memory/summarizer.py；
+* 使用简单 LLM 总结较早对话；
+* 更新 ChatSession.session_summary 或 UserMemoryProfile.short_term_summary；
+* 保留最近 10 轮作为短期上下文。
+
+本阶段实现最小版本，可以先写接口和伪实现，再接真实 LLM。
+
+### Step 9：实现长期记忆更新
+
+当会话结束后：
+
+* 调用 memory/updater.py；
+* 使用中等级 LLM 读取 UserProfile、UserMemoryProfile、ChatSession；
+* 输出 MemoryUpdatePlan；
+* 更新 UserProfile 和 UserMemoryProfile。
+
+本阶段要求 LLM 输出结构化 JSON。
+
+### Step 10：预留 LanceDB 向量记忆接口
+
+在 memory/vector_store.py 中预留接口：
+
+* add_memory()
+* search_memory()
+* delete_memory()
+
+当前可以不真正接 LanceDB，只保留可替换接口。
+
+## 现在请先执行 Step 1
+
+只做架构讲解，不要修改代码。
+
+<pre class="overflow-visible! px-0!" data-start="5953" data-end="6089"><div class="relative w-full mt-4 mb-1"><div class=""><div class="relative"><div class="h-full min-h-0 min-w-0"><div class="h-full min-h-0 min-w-0"><div class="border border-token-border-light border-radius-3xl corner-superellipse/1.1 rounded-3xl"><div class="h-full w-full border-radius-3xl bg-token-bg-elevated-secondary corner-superellipse/1.1 overflow-clip rounded-3xl lxnfua_clipPathFallback"><div class="pointer-events-none absolute end-1.5 top-1 z-2 md:end-2 md:top-1"></div><div class="relative"><div class="pe-11 pt-3"><div class="relative z-0 flex max-w-full"><div id="code-block-viewer" dir="ltr" class="q9tKkq_viewer cm-editor z-10 light:cm-light dark:cm-light flex h-full w-full flex-col items-stretch ͼd ͼr"><div class="cm-scroller"><pre class="cm-content q9tKkq_readonly m-0"><code><br/><span>---</span><br/><br/><span># 你现在要坚持的核心架构</span><br/><br/><span>你可以把它记成一句话：</span><br/><br/><span>```text</span><br/><span>memory 独立管理记忆生命周期；</span><br/><span>agent 只消费 memory_context；</span><br/><span>backend 串联 memory 和 agent；</span><br/><span>frontend 展示结果。</span></code></pre></div></div></div></div></div></div></div></div></div></div></div></div></pre>

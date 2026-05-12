@@ -39,6 +39,26 @@ export interface ChatSessionSummary {
 
 export interface ChatSessionHistory extends ChatSessionSummary {
   user_transcript: string;
+  assistant_transcript: string;
+  session_summary: string;
+  trace_summary: string;
+  recent_interactions: Array<Record<string, unknown>>;
+}
+
+export interface MemoryContext {
+  user_id: string;
+  session_id: string | null;
+  user_profile_summary: string;
+  short_term_summary: string;
+  long_term_summary: string;
+  session_summary: string;
+  recent_user_transcript: string;
+  preferences: string[];
+  negative_preferences: string[];
+  business_needs: string[];
+  recall_signals: string[];
+  tags: string[];
+  metadata: Record<string, unknown>;
 }
 
 export interface TrendingItem {

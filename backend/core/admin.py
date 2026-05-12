@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.contrib import admin
+from django.db import connection
 from django.utils.html import format_html
 
 from .models import (
@@ -53,6 +54,14 @@ class ChatSessionAdmin(admin.ModelAdmin):
         ("计数", {"fields": ("message_count", "last_message_at")}),
         ("时间", {"fields": ("created_at", "updated_at")}),
     )
+
+    def delete_model(self, request, obj):
+        cleanup_legacy_chat_session_references([obj.id])
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        cleanup_legacy_chat_session_references(list(queryset.values_list("id", flat=True)))
+        super().delete_queryset(request, queryset)
 
 
 @admin.register(TrendingCategory)
@@ -112,3 +121,18 @@ class RecallRecordAdmin(admin.ModelAdmin):
     @admin.display(description="召回文案")
     def short_message(self, obj: RecallRecord) -> str:
         return obj.generated_message[:64] + ("..." if len(obj.generated_message) > 64 else "")
+
+
+def cleanup_legacy_chat_session_references(session_ids: list[str]) -> None:
+    if not session_ids:
+        return
+    existing_tables = set(connection.introspection.table_names())
+    legacy_tables = [
+        ("core_chatmessage", "session_id"),
+        ("user_memories", "session_id"),
+    ]
+    placeholders = ", ".join(["%s"] * len(session_ids))
+    with connection.cursor() as cursor:
+        for table_name, column_name in legacy_tables:
+            if table_name in existing_tables:
+                cursor.execute(f"DELETE FROM {table_name} WHERE {column_name} IN ({placeholders})", session_ids)

@@ -15,6 +15,8 @@ urlpatterns = [
     path("api/chat/sessions", views.chat_sessions),
     path("api/chat/session", views.create_chat_session),
     path("api/chat/history", views.chat_history),
+    path("api/memory/context", views.memory_context),
+    path("api/memory/session/update", views.session_memory_update),
     path("api/trending", views.trending_collection),
     path("api/trending/categories", views.trending_categories),
     path("api/trending/<str:item_id>", views.trending_detail),

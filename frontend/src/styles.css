@@ -310,11 +310,12 @@ textarea {
 .chatWorkspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr) 300px;
   gap: 18px;
 }
 
-.chatHistoryPanel {
+.chatHistoryPanel,
+.memoryContextPanel {
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -326,16 +327,61 @@ textarea {
   padding: 14px;
 }
 
-.historyHeader {
+.memoryContextPanel {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.historyHeader,
+.memoryContextHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.historyHeader .ghostButton {
+.historyHeader .ghostButton,
+.memoryContextHeader .ghostButton {
   min-height: 34px;
   padding: 7px 10px;
+}
+
+.memoryContextHeader span {
+  display: block;
+  color: #66716d;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.memoryContextActions {
+  display: grid;
+}
+
+.memoryContextBody {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.memoryContextBody section {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #edf2ef;
+}
+
+.memoryContextBody section > span {
+  color: #66716d;
+  font-size: 12px;
+}
+
+.memoryContextBody p {
+  color: #30403b;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .historyList {
@@ -670,6 +716,10 @@ textarea {
   gap: 8px;
 }
 
+.tagRow.compact {
+  gap: 6px;
+}
+
 .tagRow span {
   border: 1px solid #d8e2dc;
   color: #4e5b57;
@@ -740,6 +790,10 @@ textarea {
 
   .chatHistoryPanel {
     max-height: 220px;
+  }
+
+  .memoryContextPanel {
+    max-height: 320px;
   }
 }
 

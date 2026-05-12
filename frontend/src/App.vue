@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { api, setToken } from "./api/client";
-import type { AgentMessage, ChatSessionSummary, RecallCandidate, TrendingItem, User, UserInsight, UserMemoryProfile } from "./types";
+import type {
+  AgentMessage,
+  ChatSessionSummary,
+  MemoryContext,
+  RecallCandidate,
+  TrendingItem,
+  User,
+  UserInsight,
+  UserMemoryProfile
+} from "./types";
 
 type ViewName = "chat" | "trending" | "user-insights" | "memory" | "recall";
 type AuthMode = "login" | "register";
@@ -45,6 +54,9 @@ const chatLoading = ref(false);
 const chatError = ref("");
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const historyLoading = ref(false);
+const currentMemoryContext = ref<MemoryContext | null>(null);
+const memoryContextLoading = ref(false);
+const memoryContextStatus = ref("");
 const openTraceGroups = ref<Record<string, boolean>>({});
 const messageBottom = ref<HTMLDivElement | null>(null);
 
@@ -115,7 +127,7 @@ onMounted(async () => {
   try {
     user.value = await api.me();
     authOpen.value = false;
-    await Promise.all([loadTrending(), loadChatSessions()]);
+    await Promise.all([loadTrending(), loadChatSessions(), loadCurrentMemoryContext()]);
   } catch {
     setToken(null);
   }
@@ -144,7 +156,7 @@ async function submitAuth() {
     user.value = response.user;
     clearAuthForm();
     authOpen.value = false;
-    await Promise.all([loadTrending(), loadChatSessions()]);
+    await Promise.all([loadTrending(), loadChatSessions(), loadCurrentMemoryContext()]);
   } catch (error) {
     authError.value = error instanceof Error ? error.message : "操作失败";
   }
@@ -178,6 +190,7 @@ function logout() {
   chatSessions.value = [];
   sessionId.value = null;
   chatEntries.value = [];
+  currentMemoryContext.value = null;
 }
 
 async function loadChatSessions() {
@@ -194,6 +207,7 @@ async function startNewChat() {
   chatEntries.value = [];
   openTraceGroups.value = {};
   chatError.value = "";
+  await loadCurrentMemoryContext();
 }
 
 async function loadChatSession(id: string) {
@@ -207,6 +221,7 @@ async function loadChatSession(id: string) {
       ? [{ id: crypto.randomUUID(), role: "user", content: history.user_transcript }]
       : [];
     openTraceGroups.value = {};
+    await loadCurrentMemoryContext();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "历史会话加载失败";
   } finally {
@@ -232,10 +247,43 @@ async function sendMessage() {
       );
     }
     await loadChatSessions();
+    await loadCurrentMemoryContext();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "发送失败";
   } finally {
     chatLoading.value = false;
+  }
+}
+
+async function loadCurrentMemoryContext() {
+  if (!user.value) return;
+  memoryContextLoading.value = true;
+  memoryContextStatus.value = "";
+  try {
+    const response = await api.getMemoryContext(sessionId.value);
+    currentMemoryContext.value = response.memory_context;
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "记忆上下文加载失败";
+  } finally {
+    memoryContextLoading.value = false;
+  }
+}
+
+async function updateCurrentSessionMemory() {
+  if (!sessionId.value) {
+    memoryContextStatus.value = "先发送一条消息，创建会话后再沉淀长期记忆。";
+    return;
+  }
+  memoryContextLoading.value = true;
+  memoryContextStatus.value = "";
+  try {
+    const response = await api.updateSessionMemory(sessionId.value);
+    currentMemoryContext.value = response.memory_context;
+    memoryContextStatus.value = "当前会话已尝试沉淀到长期记忆。";
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "长期记忆更新失败";
+  } finally {
+    memoryContextLoading.value = false;
   }
 }
 
@@ -388,7 +436,7 @@ async function loadRecall() {
 async function switchView(view: ViewName) {
   currentView.value = view;
   if (view === "trending") await loadTrending();
-  if (view === "chat") await loadChatSessions();
+  if (view === "chat") await Promise.all([loadChatSessions(), loadCurrentMemoryContext()]);
   if (view === "user-insights") await loadInsights();
   if (view === "memory") await loadMemoryModule();
   if (view === "recall") await loadRecall();
@@ -579,6 +627,67 @@ function groupChatEntries(entries: ChatEntry[]) {
             </form>
             <p v-if="chatError" class="inlineError">{{ chatError }}</p>
           </div>
+          <aside class="memoryContextPanel">
+            <div class="memoryContextHeader">
+              <div>
+                <strong>记忆上下文</strong>
+                <span>{{ currentMemoryContext?.session_id ? "当前会话" : "用户全局" }}</span>
+              </div>
+              <button class="ghostButton" type="button" :disabled="memoryContextLoading" @click="loadCurrentMemoryContext">
+                刷新
+              </button>
+            </div>
+            <div class="memoryContextActions">
+              <button class="primaryButton" type="button" :disabled="memoryContextLoading" @click="updateCurrentSessionMemory">
+                沉淀长期记忆
+              </button>
+            </div>
+            <p v-if="memoryContextStatus" class="inlineSuccess">{{ memoryContextStatus }}</p>
+            <div v-if="currentMemoryContext" class="memoryContextBody">
+              <section>
+                <span>用户画像</span>
+                <p>{{ currentMemoryContext.user_profile_summary || "暂无画像摘要" }}</p>
+              </section>
+              <section>
+                <span>短期记忆</span>
+                <p>{{ currentMemoryContext.short_term_summary || "暂无短期记忆" }}</p>
+              </section>
+              <section>
+                <span>长期记忆</span>
+                <p>{{ currentMemoryContext.long_term_summary || "暂无长期记忆" }}</p>
+              </section>
+              <section>
+                <span>会话摘要</span>
+                <p>{{ currentMemoryContext.session_summary || "暂无会话摘要" }}</p>
+              </section>
+              <section>
+                <span>偏好</span>
+                <div class="tagRow compact">
+                  <span v-for="item in currentMemoryContext.preferences" :key="item">{{ item }}</span>
+                  <span v-if="!currentMemoryContext.preferences.length">暂无</span>
+                </div>
+              </section>
+              <section>
+                <span>负向偏好</span>
+                <div class="tagRow compact">
+                  <span v-for="item in currentMemoryContext.negative_preferences" :key="item">{{ item }}</span>
+                  <span v-if="!currentMemoryContext.negative_preferences.length">暂无</span>
+                </div>
+              </section>
+              <section>
+                <span>经营需求</span>
+                <p>{{ currentMemoryContext.business_needs.join("；") || "暂无" }}</p>
+              </section>
+              <section>
+                <span>标签</span>
+                <div class="tagRow compact">
+                  <span v-for="item in currentMemoryContext.tags" :key="item">{{ item }}</span>
+                  <span v-if="!currentMemoryContext.tags.length">暂无</span>
+                </div>
+              </section>
+            </div>
+            <div v-else class="historyEmpty">发送消息后可以在这里观察 memory_context。</div>
+          </aside>
         </div>
       </section>
 

@@ -155,6 +155,44 @@ def chat_history(request: HttpRequest) -> JsonResponse:
     return JsonResponse(serialize_session_detail(session))
 
 
+def memory_context(request: HttpRequest) -> JsonResponse:
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
+    session = None
+    session_id = request.GET.get("session_id")
+    if session_id:
+        session = ChatSession.objects.filter(id=session_id, user=user).first()
+        if not session:
+            return error("Session not found", 404)
+    context = MemoryService().load_context(user, session)
+    return JsonResponse({"memory_context": context.to_dict()})
+
+
+@csrf_exempt
+def session_memory_update(request: HttpRequest) -> JsonResponse:
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
+    if request.method != "POST":
+        return method_not_allowed()
+    payload = read_json(request)
+    session = ChatSession.objects.filter(id=payload.get("session_id"), user=user).first()
+    if not session:
+        return error("Session not found", 404)
+    memory_service = MemoryService()
+    plan = memory_service.update_long_term(user=user, session=session)
+    memory = memory_service.get_or_create_memory(user)
+    return JsonResponse(
+        {
+            "status": "ok",
+            "memory": serialize_memory(memory),
+            "memory_context": memory_service.load_context(user, session).to_dict(),
+            "update_plan": plan.to_dict(),
+        }
+    )
+
+
 @csrf_exempt
 def trending_collection(request: HttpRequest) -> JsonResponse:
     user = current_user(request)
