@@ -4,7 +4,6 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from .models import (
-    ChatMessage,
     ChatSession,
     RecallRecord,
     TrendingCategory,
@@ -43,22 +42,15 @@ class UserProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ChatSession)
 class ChatSessionAdmin(admin.ModelAdmin):
-    list_display = ("title", "user", "created_at", "updated_at")
-    list_filter = ("created_at", "updated_at")
-    search_fields = ("title", "user__display_name", "user__account_id")
-    readonly_fields = ("id", "created_at", "updated_at")
-
-
-@admin.register(ChatMessage)
-class ChatMessageAdmin(admin.ModelAdmin):
-    list_display = ("short_content", "session", "user", "role", "message_type", "agent_name", "created_at")
-    list_filter = ("role", "message_type", "agent_name", "created_at")
-    search_fields = ("content", "user__display_name", "session__title", "agent_name")
-    readonly_fields = ("id", "created_at")
-
-    @admin.display(description="内容")
-    def short_content(self, obj: ChatMessage) -> str:
-        return obj.content[:48] + ("..." if len(obj.content) > 48 else "")
+    list_display = ("title", "user", "message_count", "last_message_at", "created_at", "updated_at")
+    list_filter = ("last_message_at", "created_at", "updated_at")
+    search_fields = ("title", "user_transcript", "user__display_name", "user__account_id")
+    readonly_fields = ("id", "message_count", "last_message_at", "created_at", "updated_at")
+    fieldsets = (
+        ("归属", {"fields": ("id", "user", "title")}),
+        ("用户会话文本", {"fields": ("user_transcript", "message_count", "last_message_at")}),
+        ("时间", {"fields": ("created_at", "updated_at")}),
+    )
 
 
 @admin.register(TrendingCategory)

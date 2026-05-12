@@ -1,4 +1,13 @@
-import type { AuthResponse, ChatResponse, RecallCandidate, TrendingItem, User, UserInsight } from "../types";
+import type {
+  AuthResponse,
+  ChatResponse,
+  ChatSessionHistory,
+  ChatSessionSummary,
+  RecallCandidate,
+  TrendingItem,
+  User,
+  UserInsight
+} from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
@@ -66,6 +75,14 @@ export const api = {
     request<ChatResponse>("/chat/message", {
       method: "POST",
       body: JSON.stringify({ content, session_id })
+    }),
+  listChatSessions: () => request<ChatSessionSummary[]>("/chat/sessions"),
+  getChatHistory: (session_id: string) =>
+    request<ChatSessionHistory>(`/chat/history?session_id=${encodeURIComponent(session_id)}`),
+  createChatSession: () =>
+    request<ChatSessionSummary>("/chat/session", {
+      method: "POST",
+      body: JSON.stringify({})
     }),
   listTrending: () => request<TrendingItem[]>("/trending"),
   listTrendingCategories: () => request<string[]>("/trending/categories"),

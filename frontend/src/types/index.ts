@@ -27,6 +27,20 @@ export interface ChatResponse {
   messages: AgentMessage[];
 }
 
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  message_count: number;
+  last_message_at: string | null;
+  preview: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionHistory extends ChatSessionSummary {
+  user_transcript: string;
+}
+
 export interface TrendingItem {
   id: string;
   title: string;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { api, setToken } from "./api/client";
-import type { AgentMessage, RecallCandidate, TrendingItem, User, UserInsight } from "./types";
+import type { AgentMessage, ChatSessionSummary, RecallCandidate, TrendingItem, User, UserInsight } from "./types";
 
 type ViewName = "chat" | "trending" | "user-insights" | "recall";
 type AuthMode = "login" | "register";
@@ -31,6 +31,8 @@ const sessionId = ref<string | null>(null);
 const chatText = ref("");
 const chatLoading = ref(false);
 const chatError = ref("");
+const chatSessions = ref<ChatSessionSummary[]>([]);
+const historyLoading = ref(false);
 const openTraceGroups = ref<Record<string, boolean>>({});
 const messageBottom = ref<HTMLDivElement | null>(null);
 
@@ -92,7 +94,7 @@ onMounted(async () => {
   try {
     user.value = await api.me();
     authOpen.value = false;
-    await loadTrending();
+    await Promise.all([loadTrending(), loadChatSessions()]);
   } catch {
     setToken(null);
   }
@@ -121,7 +123,7 @@ async function submitAuth() {
     user.value = response.user;
     clearAuthForm();
     authOpen.value = false;
-    await loadTrending();
+    await Promise.all([loadTrending(), loadChatSessions()]);
   } catch (error) {
     authError.value = error instanceof Error ? error.message : "操作失败";
   }
@@ -152,6 +154,43 @@ function logout() {
   setToken(null);
   user.value = null;
   authOpen.value = true;
+  chatSessions.value = [];
+  sessionId.value = null;
+  chatEntries.value = [];
+}
+
+async function loadChatSessions() {
+  if (!user.value) return;
+  try {
+    chatSessions.value = await api.listChatSessions();
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "历史会话加载失败";
+  }
+}
+
+async function startNewChat() {
+  sessionId.value = null;
+  chatEntries.value = [];
+  openTraceGroups.value = {};
+  chatError.value = "";
+}
+
+async function loadChatSession(id: string) {
+  if (!user.value) return;
+  historyLoading.value = true;
+  chatError.value = "";
+  try {
+    const history = await api.getChatHistory(id);
+    sessionId.value = history.id;
+    chatEntries.value = history.user_transcript
+      ? [{ id: crypto.randomUUID(), role: "user", content: history.user_transcript }]
+      : [];
+    openTraceGroups.value = {};
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "历史会话加载失败";
+  } finally {
+    historyLoading.value = false;
+  }
 }
 
 async function sendMessage() {
@@ -171,6 +210,7 @@ async function sendMessage() {
           : { id: crypto.randomUUID(), role: "assistant", content: message.content }
       );
     }
+    await loadChatSessions();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "发送失败";
   } finally {
@@ -244,6 +284,7 @@ async function loadRecall() {
 async function switchView(view: ViewName) {
   currentView.value = view;
   if (view === "trending") await loadTrending();
+  if (view === "chat") await loadChatSessions();
   if (view === "user-insights") await loadInsights();
   if (view === "recall") await loadRecall();
 }
@@ -334,37 +375,60 @@ function groupChatEntries(entries: ChatEntry[]) {
             <p>输入平台、类目、预算或运营目标，系统会路由到合适的 Agent。</p>
           </div>
         </div>
-        <div class="chatSurface">
-          <div v-if="visibleChatEntries.length" class="messageList">
-            <template v-for="item in groupedChatItems" :key="item.kind === 'traceGroup' ? item.id : item.entry.id">
-              <div v-if="item.kind === 'traceGroup'" class="traceGroup">
-                <button
-                  type="button"
-                  class="traceToggle"
-                  @click="openTraceGroups[item.id] = !openTraceGroups[item.id]"
-                >
-                  <span>{{ openTraceGroups[item.id] ? "⌄" : "›" }}</span>
-                  <span>Agent 执行过程 · {{ item.traces.length }} 条</span>
-                </button>
-                <div v-if="openTraceGroups[item.id]" class="tracePanel">
-                  <div v-for="(trace, index) in item.traces" :key="`${item.id}-${index}`" class="traceLine">
-                    <strong>[{{ trace.agent }}/{{ trace.function ?? "执行日志" }}]</strong>
-                    <p>{{ trace.content }}</p>
+        <div class="chatWorkspace">
+          <aside class="chatHistoryPanel">
+            <div class="historyHeader">
+              <strong>历史会话</strong>
+              <button class="ghostButton" type="button" @click="startNewChat">新对话</button>
+            </div>
+            <div v-if="chatSessions.length" class="historyList">
+              <button
+                v-for="item in chatSessions"
+                :key="item.id"
+                type="button"
+                :class="sessionId === item.id ? 'historyItem active' : 'historyItem'"
+                :disabled="historyLoading"
+                @click="loadChatSession(item.id)"
+              >
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.message_count }} 条用户输入</span>
+                <small>{{ item.preview || "暂无内容" }}</small>
+              </button>
+            </div>
+            <div v-else class="historyEmpty">登录后产生的每次完整对话会保存在这里。</div>
+          </aside>
+          <div class="chatSurface">
+            <div v-if="visibleChatEntries.length" class="messageList">
+              <template v-for="item in groupedChatItems" :key="item.kind === 'traceGroup' ? item.id : item.entry.id">
+                <div v-if="item.kind === 'traceGroup'" class="traceGroup">
+                  <button
+                    type="button"
+                    class="traceToggle"
+                    @click="openTraceGroups[item.id] = !openTraceGroups[item.id]"
+                  >
+                    <span>{{ openTraceGroups[item.id] ? "⌄" : "›" }}</span>
+                    <span>Agent 执行过程 · {{ item.traces.length }} 条</span>
+                  </button>
+                  <div v-if="openTraceGroups[item.id]" class="tracePanel">
+                    <div v-for="(trace, index) in item.traces" :key="`${item.id}-${index}`" class="traceLine">
+                      <strong>[{{ trace.agent }}/{{ trace.function ?? "执行日志" }}]</strong>
+                      <p>{{ trace.content }}</p>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div v-else :class="`bubbleRow ${item.entry.role}`">
-                <div class="bubble">{{ item.entry.content }}</div>
-              </div>
-            </template>
-            <div ref="messageBottom" />
+                <div v-else :class="`bubbleRow ${item.entry.role}`">
+                  <div class="bubble">{{ item.entry.content }}</div>
+                </div>
+              </template>
+              <div ref="messageBottom" />
+            </div>
+            <div v-else class="emptyState">可以试试：“我想在小红书做美妆选品，预算 5000 元，适合卖什么？”</div>
+            <form class="composer" @submit.prevent="sendMessage">
+              <input v-model="chatText" :disabled="!user || chatLoading" placeholder="描述你的选品、流量或带货问题" />
+              <button class="primaryIconButton" :disabled="!user || chatLoading" aria-label="发送">发送</button>
+            </form>
+            <p v-if="chatError" class="inlineError">{{ chatError }}</p>
           </div>
-          <div v-else class="emptyState">可以试试：“我想在小红书做美妆选品，预算 5000 元，适合卖什么？”</div>
-          <form class="composer" @submit.prevent="sendMessage">
-            <input v-model="chatText" :disabled="!user || chatLoading" placeholder="描述你的选品、流量或带货问题" />
-            <button class="primaryIconButton" :disabled="!user || chatLoading" aria-label="发送">发送</button>
-          </form>
-          <p v-if="chatError" class="inlineError">{{ chatError }}</p>
         </div>
       </section>
 

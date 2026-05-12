@@ -26,20 +26,11 @@ class ChatSession(models.Model):
     id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("s"))
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sessions")
     title = models.CharField(max_length=160, default="新的运营咨询")
+    user_transcript = models.TextField(default="", blank=True)
+    message_count = models.IntegerField(default=0)
+    last_message_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-
-class ChatMessage(models.Model):
-    id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("m"))
-    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name="messages")
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    role = models.CharField(max_length=24)
-    content = models.TextField()
-    message_type = models.CharField(max_length=24, default="final")
-    agent_name = models.CharField(max_length=80, null=True, blank=True)
-    agent_function = models.CharField(max_length=80, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class TrendingCategory(models.Model):

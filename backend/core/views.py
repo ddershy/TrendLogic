@@ -18,7 +18,6 @@ from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
 
 from .models import (
-    ChatMessage,
     ChatSession,
     RecallRecord,
     TrendingCategory,
@@ -118,7 +117,7 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     if not content:
         return error("Message cannot be empty", 400)
     session = get_or_create_session(user, payload.get("session_id"), content)
-    ChatMessage.objects.create(session=session, user=user, role="user", content=content)
+    append_user_input_to_session(session, content)
     UserMemory.objects.create(
         user=user,
         session=session,
@@ -135,18 +134,7 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     )
     result = TrendLogicGraph().run(content)
     messages = result["messages"]
-    for message in messages:
-        ChatMessage.objects.create(
-            session=session,
-            user=user,
-            role="assistant",
-            content=message["content"],
-            message_type=message["type"],
-            agent_name=message["agent"],
-            agent_function=message.get("function"),
-        )
     update_profile_from_text(user, content)
-    session.save(update_fields=["updated_at"])
     return JsonResponse({"session_id": session.id, "messages": messages})
 
 
@@ -175,8 +163,7 @@ def chat_history(request: HttpRequest) -> JsonResponse:
     session = ChatSession.objects.filter(id=request.GET.get("session_id"), user=user).first()
     if not session:
         return error("Session not found", 404)
-    messages = ChatMessage.objects.filter(session=session).order_by("created_at")
-    return JsonResponse([serialize_chat_message(message) for message in messages], safe=False)
+    return JsonResponse(serialize_session_detail(session))
 
 
 @csrf_exempt
@@ -391,7 +378,6 @@ def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
 
     profile = getattr(target, "profile", None)
     recent_sessions = ChatSession.objects.filter(user=target).order_by("-updated_at")[:10]
-    recent_messages = ChatMessage.objects.filter(user=target).order_by("-created_at")[:30]
     memories = UserMemory.objects.filter(user=target).exclude(status="deleted").order_by("-importance", "-updated_at")[:100]
     recall_records = RecallRecord.objects.filter(user=target).order_by("-created_at")[:20]
     return JsonResponse(
@@ -399,7 +385,7 @@ def user_workspace(request: HttpRequest, user_id: str) -> JsonResponse:
             "user": serialize_user(target),
             "profile": serialize_user_insight(target, profile),
             "recent_sessions": [serialize_session(session) for session in recent_sessions],
-            "recent_messages": [serialize_chat_message(message) for message in recent_messages],
+            "recent_conversations": [serialize_session_detail(session) for session in recent_sessions],
             "memories": [serialize_memory(memory) for memory in memories],
             "recall_records": [serialize_recall_record(record) for record in recall_records],
         }
@@ -416,8 +402,10 @@ def summarize_memory(request: HttpRequest, user_id: str) -> JsonResponse:
     target = User.objects.filter(id=user_id).first()
     if not target:
         return error("User not found", 404)
-    recent_messages = ChatMessage.objects.filter(user=target).order_by("-created_at")[:20]
-    summary = "；".join(message.content[:60] for message in reversed(list(recent_messages))) or "暂无足够对话形成长期记忆。"
+    recent_sessions = ChatSession.objects.filter(user=target).order_by("-updated_at")[:5]
+    summary = "；".join(
+        session.user_transcript[:160] for session in reversed(list(recent_sessions)) if session.user_transcript
+    ) or "暂无足够对话形成长期记忆。"
     memory = UserMemory.objects.create(
         user=target,
         memory_type="long_term",
@@ -482,6 +470,17 @@ def get_or_create_session(user: User, session_id: str | None, first_message: str
     return ChatSession.objects.create(user=user, title=first_message[:36] or "新的运营咨询")
 
 
+def append_user_input_to_session(session: ChatSession, content: str) -> None:
+    now = timezone.now()
+    line = f"[{now:%Y-%m-%d %H:%M:%S}] {content}"
+    session.user_transcript = f"{session.user_transcript}\n{line}".strip()
+    session.message_count = (session.message_count or 0) + 1
+    session.last_message_at = now
+    if session.title == "新的运营咨询":
+        session.title = content[:36] or session.title
+    session.save(update_fields=["user_transcript", "message_count", "last_message_at", "title", "updated_at"])
+
+
 def update_profile_from_text(user: User, content: str) -> None:
     profile, _ = UserProfile.objects.get_or_create(user=user)
     weights = dict(profile.interest_weights or {})
@@ -540,20 +539,20 @@ def serialize_user(user: User) -> dict:
 
 
 def serialize_session(session: ChatSession) -> dict:
-    return {"id": session.id, "title": session.title, "created_at": iso(session.created_at), "updated_at": iso(session.updated_at)}
-
-
-def serialize_chat_message(message: ChatMessage) -> dict:
+    preview = session.user_transcript.replace("\n", " ")[:96]
     return {
-        "id": message.id,
-        "session_id": message.session_id,
-        "role": message.role,
-        "content": message.content,
-        "message_type": message.message_type,
-        "agent_name": message.agent_name,
-        "agent_function": message.agent_function,
-        "created_at": iso(message.created_at),
+        "id": session.id,
+        "title": session.title,
+        "message_count": session.message_count,
+        "last_message_at": iso(session.last_message_at) if session.last_message_at else None,
+        "preview": preview,
+        "created_at": iso(session.created_at),
+        "updated_at": iso(session.updated_at),
     }
+
+
+def serialize_session_detail(session: ChatSession) -> dict:
+    return {**serialize_session(session), "user_transcript": session.user_transcript}
 
 
 def serialize_trending_item(item: TrendingItem) -> dict:

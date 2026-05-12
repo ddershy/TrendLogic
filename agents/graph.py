@@ -16,7 +16,7 @@ class AgentState(TypedDict):
     messages: list[dict]
 
 
-def router_node(state: AgentState) -> AgentState:
+def router_node(state: AgentState) -> AgentState: # 判断是否在业务范围
     router = RouterAgent()
     decision = router.run(state["user_input"])
 
@@ -39,17 +39,16 @@ def router_node(state: AgentState) -> AgentState:
     }
 
 
-# 条件边
-def route_after_router(state: AgentState) -> str:
+def route_after_router(state: AgentState) -> str: # 条件边，在范围则询问需求，不在则退出
     decision = state["router_decision"]
 
     if not decision["in_scope"]:
         return "out_of_scope"
 
-    return "need_requirement"
+    return "requirement_node"
 
 
-def out_of_scope_node(state: AgentState) -> AgentState:
+def out_of_scope_node(state: AgentState) -> AgentState: # 不在范围
     final_message = {
         "type": "final",
         "agent": "TrendLogic",
@@ -65,7 +64,7 @@ def out_of_scope_node(state: AgentState) -> AgentState:
     }
 
 
-def requirement_node(state: AgentState) -> AgentState:
+def requirement_node(state: AgentState) -> AgentState: # 需求节点，询问内容并分析需求
     requirement_agent = RequirementAgent()
     result = requirement_agent.run(state["user_input"])
 
@@ -128,7 +127,7 @@ def build_graph():
 
     graph.add_node("router", router_node)
     graph.add_node("out_of_scope", out_of_scope_node)
-    graph.add_node("need_requirement", requirement_node)
+    graph.add_node("requirement_node", requirement_node)
     graph.add_node("ask_follow_up", ask_follow_up_node)
     graph.add_node("product_placeholder", product_placeholder_node)
 
@@ -139,13 +138,13 @@ def build_graph():
         route_after_router,
         {
             "out_of_scope": "out_of_scope",
-            "need_requirement": "need_requirement",
+            "requirement_node": "requirement_node",
         },
     )
 
     graph.add_edge("out_of_scope", END)
     graph.add_conditional_edges(
-        "need_requirement",
+        "requirement_node",
         route_after_requirement,
         {
             "ask_follow_up": "ask_follow_up",

@@ -301,6 +301,84 @@ textarea {
   overflow: hidden;
 }
 
+.chatWorkspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.chatHistoryPanel {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid #dfe7e2;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.historyHeader .ghostButton {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.historyList {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.historyItem {
+  width: 100%;
+  border: 1px solid #d9e3dd;
+  background: #f8faf8;
+  color: #30403b;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 5px;
+  text-align: left;
+}
+
+.historyItem strong,
+.historyItem span,
+.historyItem small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyItem span,
+.historyItem small,
+.historyEmpty {
+  color: #66716d;
+  font-size: 12px;
+}
+
+.historyItem.active {
+  border-color: #0f766e;
+  background: #e9f7f3;
+}
+
+.historyEmpty {
+  border: 1px dashed #c9d5ce;
+  border-radius: 8px;
+  padding: 16px;
+  line-height: 1.6;
+}
+
 .chatSurface {
   min-height: 0;
   display: grid;
@@ -594,9 +672,14 @@ textarea {
     height: calc(100vh - 176px);
   }
 
+  .chatWorkspace,
   .contentGrid,
   .insightRow {
     grid-template-columns: 1fr;
+  }
+
+  .chatHistoryPanel {
+    max-height: 220px;
   }
 }
 

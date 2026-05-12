@@ -31,6 +31,8 @@ REQUIREMENT_PROMPT = """
 判断规则：
 由你来判断目前的消息是否可以推断出用户的多数目标，则返回is_complete = true。
 如果信息不足，is_complete=false，并在 missing_fields 中列出缺失字段。
+由你来补全follow_up_question和process_message，要求内容自然且具有引导性，能够让用户清晰地理解需要补充哪些信息，以及为什么需要这些信息,但为了减少token消耗，精简输出。
+
 
 你只能输出 JSON，不要输出 Markdown，不要解释。
 
@@ -48,8 +50,8 @@ JSON 格式：
     "known_constraints": []
   },
   "missing_fields": ["target_platform", "budget_range","..."],
-  "follow_up_question": "为了更准确地分析，请先告诉我：你主要想在哪个平台销售？预算大概是多少？",
-  "process_message": "我开始整理你的需求，目前已经识别到你关注二次元周边，但还缺少平台和预算信息。"
+  "follow_up_question": "为了更准确地分析，请先告诉我：……",
+  "process_message": "我开始整理你的需求，目前已经识别到你关注{target_category}，但还缺少……。"
 }
 """.strip()
 
@@ -87,12 +89,12 @@ class RequirementAgent:
 
         missing_fields = self._ensure_list(result.get("missing_fields"))
         is_complete = bool(result.get("is_complete", False))
-        if len([value for key, value in normalized_profile.items() if key in {"target_platform", "target_category", "budget_range"} and value]) >= 2:
-            is_complete = True
+        # if len([value for key, value in normalized_profile.items() if key in {"target_platform", "target_category", "budget_range"} and value]) >= 2:
+        #     is_complete = True
 
         follow_up_question = str(result.get("follow_up_question") or "").strip()
-        if not is_complete and not follow_up_question:
-            follow_up_question = "为了更准确地分析，请先告诉我：你主要想在哪个平台销售？预算大概是多少？更关注什么类目？"
+        # if not is_complete and not follow_up_question:
+        #     follow_up_question = "为了更准确地分析，请先告诉我：你主要想在哪个平台销售？预算大概是多少？更关注什么类目？"
 
         process_message = str(result.get("process_message") or "").strip()
         if not process_message:
@@ -117,8 +119,8 @@ class RequirementAgent:
 
     @staticmethod
     def _ensure_list(value: object) -> list[str]:
-        if isinstance(value, list):
+        if isinstance(value, list): # 列表返回成字符串的列表，过滤掉空字符串和只包含空格的字符串
             return [str(item).strip() for item in value if str(item).strip()]
-        if isinstance(value, str) and value.strip():
+        if isinstance(value, str) and value.strip(): # 字符串返回成单元素列表，前提是字符串不为空或不全是空格
             return [value.strip()]
         return []
