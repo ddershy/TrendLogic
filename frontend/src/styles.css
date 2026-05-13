@@ -461,12 +461,47 @@ textarea {
 
 .bubble {
   max-width: min(720px, 82%);
-  white-space: pre-wrap;
   line-height: 1.65;
   border-radius: 8px;
   padding: 12px 14px;
   background: #ffffff;
   border: 1px solid #dde6e0;
+}
+
+.markdownBody {
+  white-space: normal;
+}
+
+.markdownBody p,
+.markdownBody ul,
+.markdownBody ol,
+.markdownBody h3,
+.markdownBody h4,
+.markdownBody h5 {
+  margin: 0;
+}
+
+.markdownBody p + p,
+.markdownBody p + ul,
+.markdownBody p + ol,
+.markdownBody ul + p,
+.markdownBody ol + p {
+  margin-top: 10px;
+}
+
+.markdownBody ul,
+.markdownBody ol {
+  padding-left: 20px;
+}
+
+.markdownBody li + li {
+  margin-top: 4px;
+}
+
+.markdownBody code {
+  background: rgba(15, 118, 110, 0.1);
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 
 .bubbleRow.user .bubble {

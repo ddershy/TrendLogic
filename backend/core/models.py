@@ -89,6 +89,7 @@ class UserProfile(models.Model):
 class UserMemory(models.Model):
     id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("mem"))
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="memory")
+    short_messages = models.JSONField(default=dict, blank=True)
     short_term_summary = models.TextField(default="", blank=True)
     long_term_summary = models.TextField(default="", blank=True)
     preferences = models.JSONField(default=dict, blank=True)

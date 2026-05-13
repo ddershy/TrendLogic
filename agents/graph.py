@@ -7,6 +7,7 @@ from typing import TypedDict, NotRequired
 from langgraph.graph import StateGraph, END
 from .router_agent import RouterAgent
 from .requirement_agent import RequirementAgent
+from .product_consultant_agent import ProductConsultantAgent
 
 # 图状态
 class AgentState(TypedDict):
@@ -85,6 +86,8 @@ def requirement_node(state: AgentState) -> AgentState: # 需求节点，询问�
             "requirement_profile": result.requirement_profile,
             "missing_fields": result.missing_fields,
             "follow_up_question": result.follow_up_question,
+            "should_enter_consulting": result.should_enter_consulting,
+            "consulting_reason": result.consulting_reason,
         },
         "memory_candidates": state.get("memory_candidates", []) + memory_candidates,
         "messages": state.get("messages", []) + [process_message],
@@ -95,7 +98,7 @@ def route_after_requirement(state: AgentState) -> str:
     result = state["requirement_result"]
     if not result["is_complete"]:
         return "ask_follow_up"
-    return "product_placeholder"
+    return "product_consultant"
 
 
 def ask_follow_up_node(state: AgentState) -> AgentState:
@@ -112,13 +115,14 @@ def ask_follow_up_node(state: AgentState) -> AgentState:
     }
 
 
-def product_placeholder_node(state: AgentState) -> AgentState:
+def product_consultant_node(state: AgentState) -> AgentState:
+    consultant = ProductConsultantAgent()
+    profile = state.get("requirement_result", {}).get("requirement_profile", {})
+    content = consultant.run(profile, state.get("memory_context"))
     final_message = {
         "type": "final",
-        "agent": "TrendLogic",
-        "content": (
-            "我已经完成需求分析。下一步会进入选品咨询 Agent，结合爆品、用户记忆和业务目标生成建议。"
-        ),
+        "agent": "选品咨询Agent",
+        "content": content,
     }
 
     return {
@@ -174,7 +178,7 @@ def build_graph():
     graph.add_node("out_of_scope", out_of_scope_node)
     graph.add_node("requirement_node", requirement_node)
     graph.add_node("ask_follow_up", ask_follow_up_node)
-    graph.add_node("product_placeholder", product_placeholder_node)
+    graph.add_node("product_consultant", product_consultant_node)
 
     graph.set_entry_point("router")
 
@@ -193,11 +197,11 @@ def build_graph():
         route_after_requirement,
         {
             "ask_follow_up": "ask_follow_up",
-            "product_placeholder": "product_placeholder",
+            "product_consultant": "product_consultant",
         },
     )
     graph.add_edge("ask_follow_up", END)
-    graph.add_edge("product_placeholder", END)
+    graph.add_edge("product_consultant", END)
 
     return graph.compile()
 

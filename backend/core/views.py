@@ -528,7 +528,8 @@ def serialize_user(user: User) -> dict:
 
 
 def serialize_session(session: ChatSession) -> dict:
-    preview = session.user_transcript.replace("\n", " ")[:96]
+    preview_source = session.session_summary or session.user_transcript
+    preview = preview_source.replace("\n", " ")[:96]
     return {
         "id": session.id,
         "title": session.title,
@@ -600,6 +601,7 @@ def serialize_memory(memory: UserMemory) -> dict:
     return {
         "id": memory.id,
         "user_id": memory.user_id,
+        "short_messages": memory.short_messages,
         "short_term_summary": memory.short_term_summary,
         "long_term_summary": memory.long_term_summary,
         "preferences": memory.preferences,

@@ -32,7 +32,8 @@ REQUIREMENT_PROMPT = """
 判断规则：
 - 你必须综合“当前用户输入”和“用户记忆上下文/当前会话历史”，不要只看最后一句话。
 - 对选品/开店/运营建议类问题，核心字段是 target_platform、target_category、budget_range、target_audience。
-- 只有核心字段都已经从当前输入或会话历史中明确识别，才返回 is_complete=true，进入下一流程。
+- 如果你判断用户已经在请求专业建议、判断、推荐或方案，不要继续追问，应基于现有信息返回 should_enter_consulting=true。
+- 如果用户没有明确咨询意图，核心字段都已经从当前输入或会话历史中明确识别，才返回 is_complete=true，进入下一流程。
 - 如果只缺少 content_style、risk_preference、known_constraints 这类优化字段，不要反复追问，可以先进入下一流程。
 - 如果信息不足，missing_fields 只列最关键的 1-2 项，并提出一个自然追问。
 - process_message 要精简，说明已经识别到哪些信息，以及为什么继续或追问。
@@ -54,6 +55,8 @@ JSON 格式：
     "known_constraints": []
   },
   "missing_fields": ["target_platform", "budget_range","..."],
+  "should_enter_consulting": false,
+  "consulting_reason": "用户仍在补充基础条件，暂时不是请求完整建议。",
   "follow_up_question": "为了更准确地分析，请先告诉我：……",
   "process_message": "我开始整理你的需求，目前已经识别到你关注{target_category}，但还缺少……。"
 }
@@ -67,6 +70,8 @@ class RequirementResult:
     missing_fields: list[str]
     follow_up_question: str
     process_message: str
+    should_enter_consulting: bool = False
+    consulting_reason: str = ""
 
 
 class RequirementAgent:
@@ -75,7 +80,11 @@ class RequirementAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client or LLMClient()
 
-    def normalize_result(self, result: dict[str, Any]) -> RequirementResult:
+    def normalize_result(
+        self,
+        result: dict[str, Any],
+        memory_context: dict[str, Any] | None = None,
+    ) -> RequirementResult:
         profile = result.get("requirement_profile")
         if not isinstance(profile, dict):
             profile = {}
@@ -93,9 +102,21 @@ class RequirementAgent:
 
         missing_fields = self._ensure_list(result.get("missing_fields"))
         is_complete = bool(result.get("is_complete", False))
+        should_enter_consulting = bool(result.get("should_enter_consulting", False))
+        consulting_reason = str(result.get("consulting_reason") or "").strip()
         core_fields = ["target_platform", "target_category", "budget_range", "target_audience"]
         missing_core_fields = [field for field in core_fields if not normalized_profile.get(field)]
-        if missing_core_fields:
+        enough_to_advise = bool(normalized_profile.get("target_category")) and bool(
+            normalized_profile.get("target_platform")
+            or normalized_profile.get("budget_range")
+            or normalized_profile.get("target_audience")
+            or (memory_context or {}).get("recent_user_transcript")
+        )
+
+        if should_enter_consulting and enough_to_advise:
+            is_complete = True
+            missing_fields = []
+        elif missing_core_fields:
             is_complete = False
             missing_fields = _unique([*missing_core_fields, *missing_fields])[:2]
         else:
@@ -116,7 +137,7 @@ class RequirementAgent:
         if not process_message:
             process_message = "我正在整理你的需求信息，先确认平台、类目、预算和目标用户是否清晰。"
         if is_complete and self._looks_like_follow_up(process_message):
-            process_message = "我已经整理完核心需求：平台、类目、预算和目标用户都足够清晰，可以进入下一步分析。"
+            process_message = consulting_reason or "用户已经开始请求具体建议，我会基于现有信息进入选品咨询，不再继续追问。"
         if not is_complete and not self._looks_like_follow_up(process_message):
             process_message = f"我已经整理出部分需求，但还缺少{self._field_label(missing_fields[0]) if missing_fields else '一个关键信息'}，需要先补充后再进入下一步。"
 
@@ -126,6 +147,8 @@ class RequirementAgent:
             missing_fields=missing_fields,
             follow_up_question=follow_up_question,
             process_message=process_message,
+            should_enter_consulting=should_enter_consulting,
+            consulting_reason=consulting_reason,
         )
 
     def run(self, user_input: str, memory_context: dict[str, Any] | None = None) -> RequirementResult:
@@ -142,7 +165,7 @@ class RequirementAgent:
             {"role": "user", "content": user_input},
         ]
         result = self.llm_client.chat_json(messages)
-        return self.normalize_result(result)
+        return self.normalize_result(result, memory_context=memory_context)
 
 
     @staticmethod

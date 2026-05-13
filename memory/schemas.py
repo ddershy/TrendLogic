@@ -21,6 +21,7 @@ class MemoryContext:
     session_id: str | None = None
     user_profile_summary: str = ""
     short_term_summary: str = ""
+    short_messages: dict[str, Any] = field(default_factory=dict)
     long_term_summary: str = ""
     session_summary: str = ""
     recent_user_transcript: str = ""
@@ -71,4 +72,3 @@ class MemoryUpdatePlan:
         data = asdict(self)
         data["candidates"] = [candidate.to_dict() for candidate in self.candidates]
         return data
-

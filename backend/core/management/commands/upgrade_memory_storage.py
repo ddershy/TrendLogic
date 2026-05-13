@@ -19,6 +19,13 @@ class Command(BaseCommand):
             if UserMemory._meta.db_table not in existing_tables:
                 schema_editor.create_model(UserMemory)
                 self.stdout.write(self.style.SUCCESS(f"Created {UserMemory._meta.db_table}"))
+            elif "short_messages" not in {
+                column.name
+                for column in connection.introspection.get_table_description(connection.cursor(), UserMemory._meta.db_table)
+            }:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"ALTER TABLE {UserMemory._meta.db_table} ADD COLUMN short_messages text NOT NULL DEFAULT '{{}}'")
+                self.stdout.write(self.style.SUCCESS(f"Added {UserMemory._meta.db_table}.short_messages"))
 
         for user in User.objects.all():
             UserMemory.objects.get_or_create(

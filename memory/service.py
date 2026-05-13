@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from django.utils import timezone
@@ -53,6 +54,7 @@ class MemoryService:
             session_id=getattr(session, "id", None),
             user_profile_summary=getattr(profile, "summary", "") if profile else "",
             short_term_summary=getattr(memory, "short_term_summary", "") if memory else "",
+            short_messages=getattr(memory, "short_messages", {}) if memory else {},
             long_term_summary=getattr(memory, "long_term_summary", "") if memory else "",
             session_summary=getattr(session, "session_summary", "") if session else "",
             recent_user_transcript=_tail(getattr(session, "user_transcript", "") if session else ""),
@@ -136,8 +138,12 @@ class MemoryService:
             limit=4000,
         )
         session.recent_interactions = [*(session.recent_interactions or []), interaction]
-        compressed = self._compress_if_needed(session)
         session.message_count = (session.message_count or 0) + 1
+        if session.message_count % self.short_term_limit == 0:
+            batch_summary = self.summarizer.summarize("", session.recent_interactions[-self.short_term_limit :])
+            session.session_summary = _join_summary(session.session_summary, batch_summary, limit=3000)
+            self._append_long_term_summary(user, batch_summary)
+        session.recent_interactions = session.recent_interactions[-self.short_term_limit :]
         session.last_message_at = now
         if session.title == "新的运营咨询":
             session.title = user_message[:36] or session.title
@@ -155,9 +161,7 @@ class MemoryService:
             ]
         )
 
-        self._update_short_term_profile(user, session, user_message, candidates)
-        if compressed:
-            self._sync_short_term_summary(user, session.session_summary)
+        self._update_short_term_profile(user, session, user_message, assistant_message, candidates)
         return self.load_context(user, session)
 
     def build_long_term_update_plan(self, *, user: Any, session: Any) -> MemoryUpdatePlan:
@@ -218,7 +222,7 @@ class MemoryService:
 
     def update_memory_from_payload(self, memory: Any, payload: dict):
         text_fields = ["short_term_summary", "long_term_summary"]
-        json_fields = ["preferences", "negative_preferences", "business_needs", "behavior_notes", "recall_signals", "tags"]
+        json_fields = ["short_messages", "preferences", "negative_preferences", "business_needs", "behavior_notes", "recall_signals", "tags"]
         changed_fields: list[str] = []
 
         for field in text_fields:
@@ -228,7 +232,7 @@ class MemoryService:
 
         for field in json_fields:
             if field in payload:
-                default_value = {} if field == "preferences" else []
+                default_value = {} if field in {"preferences", "short_messages"} else []
                 setattr(memory, field, payload.get(field) if payload.get(field) is not None else default_value)
                 changed_fields.append(field)
 
@@ -258,6 +262,7 @@ class MemoryService:
         user: Any,
         session: Any,
         user_message: str,
+        assistant_message: str,
         candidates: list[MemoryCandidate],
     ) -> None:
         from agents.user_profile_agent import UserProfileAgent
@@ -269,7 +274,8 @@ class MemoryService:
         candidate_tags = [tag for candidate in candidates for tag in candidate.tags]
         all_tags = _merge_list(memory.tags, [*tags, *candidate_tags])
 
-        memory.short_term_summary = _tail(session.session_summary or user_message, limit=1200)
+        memory.short_messages = _append_short_messages(memory.short_messages, user_message, assistant_message, self.short_term_limit)
+        memory.short_term_summary = _json_short_messages_text(memory.short_messages)
         memory.tags = all_tags
         memory.confidence = max(float(memory.confidence or 0), 0.72)
         memory.last_used_at = timezone.now()
@@ -290,6 +296,14 @@ class MemoryService:
         memory.short_term_summary = summary
         memory.last_used_at = timezone.now()
         memory.save(update_fields=["short_term_summary", "last_used_at", "updated_at"])
+
+    def _append_long_term_summary(self, user: Any, summary: str) -> None:
+        if not summary:
+            return
+        memory = self.get_or_create_memory(user)
+        memory.long_term_summary = _join_summary(memory.long_term_summary, summary, limit=4000)
+        memory.last_used_at = timezone.now()
+        memory.save(update_fields=["long_term_summary", "last_used_at", "updated_at"])
 
     def _normalize_candidate(self, value: MemoryCandidate | dict) -> MemoryCandidate:
         if isinstance(value, MemoryCandidate):
@@ -387,3 +401,16 @@ def _join_summary(existing: str, addition: str, limit: int = 2000) -> str:
     if addition in existing:
         return existing[-limit:]
     return f"{existing}\n{addition}"[-limit:]
+
+
+def _append_short_messages(existing: Any, human_message: str, ai_message: str, round_limit: int) -> dict:
+    short_messages = existing if isinstance(existing, dict) else {}
+    items = short_messages.get("ShortMessage") if isinstance(short_messages.get("ShortMessage"), list) else []
+    items = [*items, {"HumanMessage": human_message}, {"AIMessage": ai_message}]
+    return {"ShortMessage": items[-round_limit * 2 :]}
+
+
+def _json_short_messages_text(value: Any) -> str:
+    payload = value if isinstance(value, dict) else {"ShortMessage": []}
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+

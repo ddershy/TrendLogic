@@ -104,7 +104,8 @@ class UserMemoryAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at")
     fieldsets = (
         ("归属", {"fields": ("id", "user")}),
-        ("记忆摘要", {"fields": ("short_term_summary", "long_term_summary")}),
+        ("短期记忆", {"fields": ("short_messages", "short_term_summary")}),
+        ("长期记忆", {"fields": ("long_term_summary",)}),
         ("偏好与需求", {"fields": ("preferences", "negative_preferences", "business_needs", "behavior_notes", "recall_signals", "tags")}),
         ("状态", {"fields": ("confidence", "last_used_at")}),
         ("时间", {"fields": ("created_at", "updated_at")}),

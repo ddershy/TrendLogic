@@ -217,7 +217,9 @@ async function loadChatSession(id: string) {
   try {
     const history = await api.getChatHistory(id);
     sessionId.value = history.id;
-    chatEntries.value = history.user_transcript
+    chatEntries.value = history.session_summary
+      ? [{ id: crypto.randomUUID(), role: "assistant", content: `会话摘要\n${history.session_summary}` }]
+      : history.user_transcript
       ? [{ id: crypto.randomUUID(), role: "user", content: history.user_transcript }]
       : [];
     openTraceGroups.value = {};
@@ -479,6 +481,48 @@ function parseJson(value: string, fallback: unknown) {
   return JSON.parse(text);
 }
 
+function formatJson(value: unknown) {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function renderMarkdown(value: string) {
+  const escaped = escapeHtml(value);
+  const blocks = escaped.split(/\n{2,}/).map((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return "";
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length + 2;
+      return `<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`;
+    }
+    const lines = trimmed.split("\n");
+    if (lines.every((line) => /^[-*]\s+/.test(line.trim()))) {
+      return `<ul>${lines.map((line) => `<li>${renderInlineMarkdown(line.trim().replace(/^[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+    }
+    if (lines.every((line) => /^\d+\.\s+/.test(line.trim()))) {
+      return `<ol>${lines.map((line) => `<li>${renderInlineMarkdown(line.trim().replace(/^\d+\.\s+/, ""))}</li>`).join("")}</ol>`;
+    }
+    return `<p>${renderInlineMarkdown(trimmed).replace(/\n/g, "<br>")}</p>`;
+  });
+  return blocks.join("");
+}
+
+function renderInlineMarkdown(value: string) {
+  return value
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function emptyMemoryDraft(): MemoryDraft {
   return {
     short_term_summary: "",
@@ -615,7 +659,7 @@ function groupChatEntries(entries: ChatEntry[]) {
                   </div>
                 </div>
                 <div v-else :class="`bubbleRow ${item.entry.role}`">
-                  <div class="bubble">{{ item.entry.content }}</div>
+                  <div class="bubble markdownBody" v-html="renderMarkdown(item.entry.content)" />
                 </div>
               </template>
               <div ref="messageBottom" />
@@ -650,7 +694,7 @@ function groupChatEntries(entries: ChatEntry[]) {
               </section>
               <section>
                 <span>短期记忆</span>
-                <p>{{ currentMemoryContext.short_term_summary || "暂无短期记忆" }}</p>
+                <p>{{ formatJson(currentMemoryContext.short_messages) }}</p>
               </section>
               <section>
                 <span>长期记忆</span>

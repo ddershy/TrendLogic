@@ -50,6 +50,7 @@ export interface MemoryContext {
   session_id: string | null;
   user_profile_summary: string;
   short_term_summary: string;
+  short_messages: Record<string, unknown>;
   long_term_summary: string;
   session_summary: string;
   recent_user_transcript: string;
@@ -92,6 +93,7 @@ export interface UserInsight {
 export interface UserMemoryProfile {
   id: string;
   user_id: string;
+  short_messages: Record<string, unknown>;
   short_term_summary: string;
   long_term_summary: string;
   preferences: Record<string, unknown>;
