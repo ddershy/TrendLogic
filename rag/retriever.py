@@ -8,6 +8,7 @@ from .config import rag_config
 from .document_loader import load_text_file
 from .embedder import BaseEmbedder, create_embedder
 from .vector_store import LanceDBVectorStore
+from metrics import measure_ms, record_metric
 
 
 class RAGService:
@@ -50,5 +51,21 @@ class RAGService:
         self.vector_store.delete_document(document_id)
 
     def search(self, query: str, top_k: int = 5, filters: dict | None = None) -> list[dict]:
-        vector = self.embedder.embed(query)
-        return self.vector_store.search(vector, top_k=top_k, filters=filters)
+        with measure_ms() as embedding_timing:
+            vector = self.embedder.embed(query)
+        with measure_ms() as search_timing:
+            results = self.vector_store.search(vector, top_k=top_k, filters=filters)
+        total_latency = embedding_timing["latency_ms"] + search_timing["latency_ms"]
+        record_metric(
+            "rag.search",
+            total_latency,
+            route="RAGService.search",
+            metadata={
+                "top_k": top_k,
+                "filters": filters or {},
+                "result_count": len(results),
+                "embedding_latency_ms": embedding_timing["latency_ms"],
+                "vector_search_latency_ms": search_timing["latency_ms"],
+            },
+        )
+        return results

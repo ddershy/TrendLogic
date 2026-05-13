@@ -9,19 +9,23 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import connection
-from django.db.models import Q
+from django.db.models import Avg, Count, Q
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from agents.graph import TrendLogicGraph
+from agents.llm_client import LLMClient
 from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
 from memory.service import MemoryService
+from metrics import measure_ms, record_metric
 from rag import RAGService
 
 from .models import (
     ChatSession,
+    MetricEvent,
+    RAGEvaluationRun,
     RecallRecord,
     TrendingCategory,
     TrendingItem,
@@ -113,9 +117,18 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     if isinstance(session_or_response, JsonResponse):
         return session_or_response
     try:
-        response = run_chat_graph(user, session_or_response, content)
+        with measure_ms() as timing:
+            response = run_chat_graph(user, session_or_response, content)
     except Exception as exc:
         return error(f"Agent 执行失败：{exc}", 500)
+    record_metric(
+        "chat.e2e",
+        timing["latency_ms"],
+        route="/api/chat/message",
+        user=user,
+        session=session_or_response,
+        metadata={"stream": False, "message_length": len(content)},
+    )
     return JsonResponse(response)
 
 
@@ -133,6 +146,8 @@ def chat_message_stream(request: HttpRequest) -> JsonResponse | StreamingHttpRes
     session = session_or_response
 
     def event_stream():
+        e2e_start = time.perf_counter()
+        first_token_ms = 0.0
         yield stream_event("session", {"session_id": session.id})
         yield stream_event(
             "process",
@@ -154,7 +169,9 @@ def chat_message_stream(request: HttpRequest) -> JsonResponse | StreamingHttpRes
         final_message = ""
         trace_messages = []
         try:
+            graph_latency_ms = 0.0
             for step in TrendLogicGraph().run_steps(content, memory_context.to_dict()):
+                graph_latency_ms += float(step.get("latency_ms") or 0.0)
                 if step.get("state"):
                     final_state = step["state"]
                 for message in step.get("new_messages", []):
@@ -185,9 +202,26 @@ def chat_message_stream(request: HttpRequest) -> JsonResponse | StreamingHttpRes
         )
         yield stream_event("final_start", {"message": {"type": "final", "agent": "TrendLogic", "content": ""}})
         for chunk in chunk_text(final_message):
+            if not first_token_ms:
+                first_token_ms = round((time.perf_counter() - e2e_start) * 1000, 3)
             yield stream_event("final_delta", {"content": chunk})
             time.sleep(0.012)
         yield stream_event("done", {"session_id": session.id})
+        total_ms = round((time.perf_counter() - e2e_start) * 1000, 3)
+        record_metric(
+            "chat.e2e",
+            total_ms,
+            route="/api/chat/message/stream",
+            user=user,
+            session=session,
+            metadata={
+                "stream": True,
+                "message_length": len(content),
+                "first_token_ms": first_token_ms,
+                "agent_chain_latency_ms": round(graph_latency_ms, 3),
+                "final_length": len(final_message),
+            },
+        )
 
     return StreamingHttpResponse(event_stream(), content_type="application/x-ndjson; charset=utf-8")
 
@@ -365,6 +399,33 @@ def user_insights(request: HttpRequest) -> JsonResponse:
     return JsonResponse(rows, safe=False)
 
 
+def metrics_summary(request: HttpRequest) -> JsonResponse:
+    admin = require_admin(request)
+    if isinstance(admin, JsonResponse):
+        return admin
+    grouped = (
+        MetricEvent.objects.values("event_type")
+        .annotate(count=Count("id"), avg_latency_ms=Avg("latency_ms"))
+        .order_by("event_type")
+    )
+    recent_events = MetricEvent.objects.order_by("-created_at")[:500]
+    latest_rag_runs = RAGEvaluationRun.objects.order_by("-created_at")[:10]
+    return JsonResponse(
+        {
+            "runtime_metrics": [
+                {
+                    "event_type": row["event_type"],
+                    "count": row["count"],
+                    "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 3),
+                }
+                for row in grouped
+            ],
+            "recent_events": [serialize_metric_event(event) for event in recent_events],
+            "rag_evaluation_runs": [serialize_rag_eval_run(run) for run in latest_rag_runs],
+        }
+    )
+
+
 @csrf_exempt
 def rag_upload(request: HttpRequest) -> JsonResponse:
     admin = require_admin(request)
@@ -387,18 +448,24 @@ def rag_upload(request: HttpRequest) -> JsonResponse:
         category=request.POST.get("category", "选品资料"),
         uploaded_by=admin,
     )
-    result = RAGService().add_document(
-        str(target),
-        metadata={
-            "document_id": document.id,
-            "filename": document.filename,
-            "category": document.category,
-            "visibility": document.visibility,
-            "uploaded_by": admin.id,
-        },
-        document=document,
-        replace_document=True,
-    )
+    try:
+        result = RAGService().add_document(
+            str(target),
+            metadata={
+                "document_id": document.id,
+                "filename": document.filename,
+                "category": document.category,
+                "visibility": document.visibility,
+                "uploaded_by": admin.id,
+            },
+            document=document,
+            replace_document=True,
+        )
+    except Exception as exc:
+        document.delete()
+        if target.exists():
+            target.unlink()
+        return error(format_rag_error(exc), 502)
     document.vectorized = result["chunks"] > 0
     document.chunk_count = result["chunks"]
     document.save(update_fields=["vectorized", "chunk_count"])
@@ -406,9 +473,9 @@ def rag_upload(request: HttpRequest) -> JsonResponse:
 
 
 def rag_documents(request: HttpRequest) -> JsonResponse:
-    admin = require_admin(request)
-    if isinstance(admin, JsonResponse):
-        return admin
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
     documents = UploadedDocument.objects.order_by("-created_at")
     return JsonResponse([serialize_document(document) for document in documents], safe=False)
 
@@ -443,18 +510,23 @@ def rag_document_index(request: HttpRequest, document_id: str) -> JsonResponse:
         return error("Document not found", 404)
     if not Path(document.file_path).exists():
         return error("Document file is missing", 404)
-    result = RAGService().add_document(
-        document.file_path,
-        metadata={
-            "document_id": document.id,
-            "filename": document.filename,
-            "category": document.category,
-            "visibility": document.visibility,
-            "uploaded_by": document.uploaded_by_id,
-        },
-        document=document,
-        replace_document=True,
-    )
+    try:
+        result = RAGService().add_document(
+            document.file_path,
+            metadata={
+                "document_id": document.id,
+                "filename": document.filename,
+                "category": document.category,
+                "visibility": document.visibility,
+                "uploaded_by": document.uploaded_by_id,
+            },
+            document=document,
+            replace_document=True,
+        )
+    except Exception as exc:
+        document.vectorized = False
+        document.save(update_fields=["vectorized"])
+        return error(format_rag_error(exc), 502)
     document.vectorized = result["chunks"] > 0
     document.chunk_count = result["chunks"]
     document.save(update_fields=["vectorized", "chunk_count"])
@@ -463,9 +535,9 @@ def rag_document_index(request: HttpRequest, document_id: str) -> JsonResponse:
 
 @csrf_exempt
 def rag_search(request: HttpRequest) -> JsonResponse:
-    admin = require_admin(request)
-    if isinstance(admin, JsonResponse):
-        return admin
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
     if request.method != "POST":
         return method_not_allowed()
     payload = read_json(request)
@@ -476,8 +548,50 @@ def rag_search(request: HttpRequest) -> JsonResponse:
     category = str(payload.get("category", "")).strip()
     if category:
         filters["category"] = category
-    results = RAGService().search(query, top_k=int(payload.get("top_k", 5)), filters=filters)
+    try:
+        with measure_ms() as timing:
+            results = RAGService().search(query, top_k=int(payload.get("top_k", 5)), filters=filters)
+    except Exception as exc:
+        return error(format_rag_error(exc), 502)
+    record_metric(
+        "rag.endpoint.search",
+        timing["latency_ms"],
+        route="/api/admin/rag/search",
+        user=user,
+        metadata={"top_k": int(payload.get("top_k", 5)), "result_count": len(results), "category": category},
+    )
     return JsonResponse({"query": query, "results": results})
+
+
+@csrf_exempt
+def rag_answer(request: HttpRequest) -> JsonResponse:
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
+    if request.method != "POST":
+        return method_not_allowed()
+    payload = read_json(request)
+    query = str(payload.get("query", "")).strip()
+    if not query:
+        return error("Query is required", 400)
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    category = str(payload.get("category", "")).strip()
+    if category:
+        filters["category"] = category
+    try:
+        with measure_ms() as timing:
+            results = RAGService().search(query, top_k=int(payload.get("top_k", 5)), filters=filters)
+            answer = generate_rag_answer(query, results)
+    except Exception as exc:
+        return error(format_rag_error(exc), 502)
+    record_metric(
+        "rag.endpoint.answer",
+        timing["latency_ms"],
+        route="/api/admin/rag/answer",
+        user=user,
+        metadata={"top_k": int(payload.get("top_k", 5)), "result_count": len(results), "category": category},
+    )
+    return JsonResponse({"query": query, "answer": answer, "results": results})
 
 
 def recall_candidates(request: HttpRequest) -> JsonResponse:
@@ -924,6 +1038,33 @@ def serialize_recall_record(record: RecallRecord) -> dict:
     }
 
 
+def serialize_metric_event(event: MetricEvent) -> dict:
+    return {
+        "id": event.id,
+        "event_type": event.event_type,
+        "route": event.route,
+        "user_id": event.user_id,
+        "session_id": event.session_id,
+        "latency_ms": event.latency_ms,
+        "metadata": event.metadata,
+        "created_at": iso(event.created_at),
+    }
+
+
+def serialize_rag_eval_run(run: RAGEvaluationRun) -> dict:
+    return {
+        "id": run.id,
+        "top_k": run.top_k,
+        "case_count": run.case_count,
+        "precision_at_k": run.precision_at_k,
+        "recall_at_k": run.recall_at_k,
+        "mrr": run.mrr,
+        "avg_latency_ms": run.avg_latency_ms,
+        "metrics": run.metrics,
+        "created_at": iso(run.created_at),
+    }
+
+
 def ensure_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -971,6 +1112,50 @@ def iso(value) -> str:
 
 def error(message: str, status: int) -> JsonResponse:
     return JsonResponse({"detail": message}, status=status)
+
+
+def format_rag_error(exc: Exception) -> str:
+    text = str(exc)
+    if "invalid_api_key" in text or "Incorrect API key" in text or "401" in text:
+        return "RAG 索引失败：DASHSCOPE_API_KEY 无效。请在根目录 .env 中填写阿里云百炼/DashScope API Key，并重启后端。"
+    if "DASHSCOPE_API_KEY" in text:
+        return f"RAG 索引失败：{text}"
+    if "lancedb" in text.lower():
+        return f"RAG 索引失败：LanceDB 初始化失败，请确认已安装 lancedb。{text}"
+    return f"RAG 索引失败：{text}"
+
+
+def generate_rag_answer(query: str, results: list[dict]) -> str:
+    if not results:
+        return "知识库里暂时没有召回到足够相关的资料。可以换一个更具体的问题，或者先上传相关文档后再试。"
+    llm = LLMClient()
+    if not llm.is_configured:
+        raise RuntimeError("LLM 未配置，无法基于 RAG 召回结果生成回答。")
+    snippets = [
+        {
+            "source": (item.get("metadata") or {}).get("filename", ""),
+            "category": (item.get("metadata") or {}).get("category", ""),
+            "text": str(item.get("text") or "")[:1200],
+        }
+        for item in results[:5]
+    ]
+    return llm.chat(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "你是 TrendLogic 的知识库问答助手。请只根据给定的 RAG 召回片段回答，"
+                    "不要逐字复制长段原文，不要暴露 chunk、向量、score 等技术细节。"
+                    "如果资料不足，请明确说明不足，并给出下一步应该补充什么资料。"
+                    "回答要面向电商运营用户，给出结构化建议。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({"question": query, "retrieved_snippets": snippets}, ensure_ascii=False),
+            },
+        ]
+    )
 
 
 def method_not_allowed() -> JsonResponse:

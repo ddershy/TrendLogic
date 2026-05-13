@@ -215,5 +215,10 @@ export const api = {
     request<{ query: string; results: RAGSearchResult[] }>("/admin/rag/search", {
       method: "POST",
       body: JSON.stringify({ query, top_k, category: category || undefined })
+    }),
+  answerRag: (query: string, top_k = 5, category?: string) =>
+    request<{ query: string; answer: string; results: RAGSearchResult[] }>("/admin/rag/answer", {
+      method: "POST",
+      body: JSON.stringify({ query, top_k, category: category || undefined })
     })
 };

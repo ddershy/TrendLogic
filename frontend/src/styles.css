@@ -621,6 +621,10 @@ textarea {
   gap: 22px;
 }
 
+.ragGrid.readerOnly {
+  grid-template-columns: minmax(0, 920px);
+}
+
 .ragMain,
 .ragSearchPanel,
 .ragDocuments,
@@ -649,6 +653,15 @@ textarea {
   padding: 14px;
   display: grid;
   gap: 10px;
+}
+
+.ragAnswerCard {
+  border: 1px solid #cfe0da;
+  background: #f2f8f5;
+  border-radius: 8px;
+  padding: 16px;
+  color: #243530;
+  line-height: 1.7;
 }
 
 .ragResultCard p {

@@ -6,6 +6,9 @@ from django.utils.html import format_html
 
 from .models import (
     ChatSession,
+    MetricEvent,
+    RAGEvaluationCase,
+    RAGEvaluationRun,
     RecallRecord,
     TrendingCategory,
     TrendingItem,
@@ -122,6 +125,30 @@ class RecallRecordAdmin(admin.ModelAdmin):
     @admin.display(description="召回文案")
     def short_message(self, obj: RecallRecord) -> str:
         return obj.generated_message[:64] + ("..." if len(obj.generated_message) > 64 else "")
+
+
+@admin.register(MetricEvent)
+class MetricEventAdmin(admin.ModelAdmin):
+    list_display = ("event_type", "route", "latency_ms", "user", "session", "created_at")
+    list_filter = ("event_type", "route", "created_at")
+    search_fields = ("event_type", "route", "metadata", "user__display_name", "session__title")
+    readonly_fields = ("id", "created_at")
+
+
+@admin.register(RAGEvaluationCase)
+class RAGEvaluationCaseAdmin(admin.ModelAdmin):
+    list_display = ("name", "category", "top_k", "is_active", "created_at")
+    list_filter = ("category", "is_active", "created_at")
+    search_fields = ("name", "query", "expected_filenames", "expected_keywords")
+    list_editable = ("is_active",)
+    readonly_fields = ("id", "created_at")
+
+
+@admin.register(RAGEvaluationRun)
+class RAGEvaluationRunAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "case_count", "top_k", "precision_at_k", "recall_at_k", "mrr", "avg_latency_ms")
+    list_filter = ("created_at",)
+    readonly_fields = ("id", "created_at")
 
 
 def cleanup_legacy_chat_session_references(session_ids: list[str]) -> None:

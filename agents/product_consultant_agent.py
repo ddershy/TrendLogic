@@ -16,6 +16,8 @@ PRODUCT_CONSULTANT_PROMPT = """
 
 关键要求：
 - 必须优先理解 latest_user_input，不要只根据 requirement_profile 套模板。
+- 如果 trend_context 里有 rag_results，请把它当作内部知识库参考资料来吸收总结，不要把召回原文整段复制给用户。
+- 可以用“根据内部资料/知识库倾向”这样的表达，但不要暴露 chunk、score、metadata 等技术细节。
 - 如果 task_type=pricing_strategy，或者 latest_user_input 在问“定价多少合理、原价 80%/120%、折扣、毛利、价格带”，你的回答必须以定价分析为主。
 - 定价分析时不要输出普通“优先测试方向”模板；应输出价格带、倍率建议、测试分组、毛利/转化风险和下一步验证方法。
 - 如果缺少成本、竞品价或目标毛利，可以用假设区间分析，不要继续追问。
@@ -89,7 +91,7 @@ class ProductConsultantAgent:
         trend_context: dict[str, Any] | None = None,
         user_input: str = "",
     ) -> ProductConsultantResult:
-        tool_context = self.collect_tool_context(requirement_profile, memory_context or {}, trend_context or {})
+        tool_context = self.collect_tool_context(requirement_profile, memory_context or {}, trend_context or {}, user_input=user_input)
         if not self.llm_client:
             raise RuntimeError(f"ProductConsultantAgent 初始化 LLMClient 失败：{self.llm_init_error or 'unknown error'}")
         if not self.llm_client.is_configured:
@@ -125,8 +127,13 @@ class ProductConsultantAgent:
         requirement_profile: dict[str, Any],
         memory_context: dict[str, Any],
         trend_context: dict[str, Any],
+        user_input: str = "",
     ) -> dict[str, Any]:
         base_context = dict(trend_context or {})
+        rag_results = self._query_rag_results(user_input, requirement_profile)
+        if rag_results:
+            base_context["rag_results"] = rag_results
+
         fallback_items = self._query_trending_items(requirement_profile)
         if fallback_items and not base_context.get("trending_items"):
             base_context["trending_items"] = fallback_items
@@ -141,7 +148,8 @@ class ProductConsultantAgent:
                         "role": "system",
                         "content": (
                             "你是 TrendLogic 的工具规划器。请只在需要时调用工具收集上下文，"
-                            "不要输出最终选品建议。优先查询 query_trending_items；如果有 user_id，"
+                            "不要输出最终选品建议。RAG 已经由系统预检索过，不要重复调用 rag_search。"
+                            "优先查询 query_trending_items；如果有 user_id，"
                             "可以查询 query_user_workspace、query_recent_chat_sessions 和 query_recall_records。"
                         ),
                     },
@@ -166,7 +174,6 @@ class ProductConsultantAgent:
                         "query_user_memory",
                         "query_recent_chat_sessions",
                         "query_recall_records",
-                        "rag_search",
                         "search_web",
                     ]
                 ),
@@ -195,6 +202,8 @@ class ProductConsultantAgent:
                 tool_names.append(name)
         if not tool_names and tool_context.get("trending_items"):
             tool_names.append("query_trending_items")
+        if tool_context.get("rag_results"):
+            tool_names.append("rag_search")
         if not tool_names:
             return process_message
         return f"{process_message} 已调用工具：{', '.join(tool_names)}。"
@@ -243,6 +252,34 @@ class ProductConsultantAgent:
             )
         except Exception:
             return []
+
+    def _query_rag_results(self, user_input: str, profile: dict[str, Any]) -> list[dict[str, Any]]:
+        query_parts = [
+            user_input,
+            str(profile.get("target_platform") or ""),
+            str(profile.get("target_category") or ""),
+            str(profile.get("business_goal") or ""),
+            str(profile.get("task_type") or ""),
+        ]
+        query = " ".join(part for part in query_parts if part.strip()).strip()
+        if not query:
+            return []
+        try:
+            results = self.tool_client.call("rag_search", query=query, top_k=4, filters={})
+        except Exception:
+            return []
+        if not isinstance(results, list):
+            return []
+        return [
+            {
+                "text": str(item.get("text") or "")[:900],
+                "source": (item.get("metadata") or {}).get("filename", ""),
+                "category": (item.get("metadata") or {}).get("category", ""),
+                "score": item.get("score"),
+            }
+            for item in results[:4]
+            if isinstance(item, dict) and item.get("text")
+        ]
 
     def _compose_final_message(
         self,

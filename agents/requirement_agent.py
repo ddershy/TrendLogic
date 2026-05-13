@@ -36,6 +36,8 @@ REQUIREMENT_PROMPT = """
 - 你必须综合“当前用户输入”和“用户记忆上下文/当前会话历史”，不要只看最后一句话。
 - 对选品/开店/运营建议类问题，核心字段是 target_platform、target_category、budget_range、target_audience。
 - 如果用户主要在问“定价多少合理、原价百分比、折扣、利润、毛利、价格带”，task_type 必须设为 pricing_strategy，并且不要把它改写成普通选品问题。
+- 如果用户说“查已有资料、查知识库、参考文档、根据资料”等，并且已经给出商品/类目或具体问题，应优先进入后续咨询，让咨询 Agent 先检索 RAG，不要先追问平台和预算。
+- 对 pricing_strategy：只要用户已经给出商品/类目或明确的 pricing_question，就可以先进入咨询；缺少平台、预算、目标用户时，应让后续 Agent 基于知识库和合理假设回答，而不是在本节点反复追问。
 - 如果你判断用户已经在请求专业建议、判断、推荐或方案，不要继续追问，应基于现有信息返回 should_enter_consulting=true。
 - 如果用户没有明确咨询意图，核心字段都已经从当前输入或会话历史中明确识别，才返回 is_complete=true，进入下一流程。
 - 如果只缺少 content_style、risk_preference、known_constraints 这类优化字段，不要反复追问，可以先进入下一流程。
@@ -119,6 +121,8 @@ class RequirementAgent:
         consulting_reason = str(result.get("consulting_reason") or "").strip()
         core_fields = ["target_platform", "target_category", "budget_range", "target_audience"]
         missing_core_fields = [field for field in core_fields if not normalized_profile.get(field)]
+        is_pricing_task = normalized_profile.get("task_type") == "pricing_strategy" or bool(normalized_profile.get("pricing_question"))
+        pricing_ready = is_pricing_task and bool(normalized_profile.get("target_category") or normalized_profile.get("pricing_question"))
         enough_to_advise = bool(normalized_profile.get("target_category")) and bool(
             normalized_profile.get("target_platform")
             or normalized_profile.get("budget_range")
@@ -126,7 +130,12 @@ class RequirementAgent:
             or (memory_context or {}).get("recent_user_transcript")
         )
 
-        if should_enter_consulting and enough_to_advise:
+        if pricing_ready:
+            is_complete = True
+            missing_fields = []
+            should_enter_consulting = True
+            consulting_reason = consulting_reason or "用户正在询问定价判断，应先结合已有资料和合理假设进入咨询，而不是继续追问。"
+        elif should_enter_consulting and enough_to_advise:
             is_complete = True
             missing_fields = []
         elif missing_core_fields:

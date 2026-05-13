@@ -117,3 +117,39 @@ class RecallRecord(models.Model):
     generated_message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_recall_records")
+
+
+class MetricEvent(models.Model):
+    id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("met"))
+    event_type = models.CharField(max_length=80, db_index=True)
+    route = models.CharField(max_length=160, default="", blank=True, db_index=True)
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="metric_events")
+    session = models.ForeignKey(ChatSession, null=True, blank=True, on_delete=models.SET_NULL, related_name="metric_events")
+    latency_ms = models.FloatField(default=0.0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+
+class RAGEvaluationCase(models.Model):
+    id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("ragcase"))
+    name = models.CharField(max_length=160)
+    query = models.TextField()
+    category = models.CharField(max_length=80, default="", blank=True)
+    expected_document_ids = models.JSONField(default=list, blank=True)
+    expected_filenames = models.JSONField(default=list, blank=True)
+    expected_keywords = models.JSONField(default=list, blank=True)
+    top_k = models.IntegerField(default=5)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class RAGEvaluationRun(models.Model):
+    id = models.CharField(primary_key=True, max_length=32, default=lambda: new_id("ragrun"))
+    top_k = models.IntegerField(default=5)
+    case_count = models.IntegerField(default=0)
+    precision_at_k = models.FloatField(default=0.0)
+    recall_at_k = models.FloatField(default=0.0)
+    mrr = models.FloatField(default=0.0)
+    avg_latency_ms = models.FloatField(default=0.0)
+    metrics = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)

@@ -89,6 +89,7 @@ const ragCategory = ref("选品资料");
 const ragQuery = ref("");
 const ragSearchCategory = ref("");
 const ragResults = ref<RAGSearchResult[]>([]);
+const ragAnswer = ref("");
 const ragLoading = ref(false);
 const ragIndexingId = ref("");
 const ragDeletingId = ref("");
@@ -101,7 +102,7 @@ const navItems = computed(() => [
   { key: "user-insights" as const, label: "用户洞察", adminOnly: true },
   { key: "memory" as const, label: "记忆档案", adminOnly: true },
   { key: "recall" as const, label: "一键召回", adminOnly: true },
-  { key: "rag" as const, label: "知识库", adminOnly: true }
+  { key: "rag" as const, label: "知识库", adminOnly: false }
 ]);
 
 const visibleNavItems = computed(() => navItems.value.filter((item) => !item.adminOnly || user.value?.role === "admin"));
@@ -562,12 +563,14 @@ async function searchRagDocuments() {
   ragLoading.value = true;
   ragError.value = "";
   ragStatus.value = "";
+  ragAnswer.value = "";
   try {
-    const response = await api.searchRag(ragQuery.value.trim(), 5, ragSearchCategory.value || undefined);
+    const response = await api.answerRag(ragQuery.value.trim(), 5, ragSearchCategory.value || undefined);
     ragResults.value = response.results;
-    ragStatus.value = `检索完成，命中 ${response.results.length} 个分块`;
+    ragAnswer.value = response.answer;
+    ragStatus.value = `AI 已基于 ${response.results.length} 个召回片段生成回答`;
   } catch (error) {
-    ragError.value = error instanceof Error ? error.message : "检索失败";
+    ragError.value = error instanceof Error ? error.message : "知识库问答失败";
   } finally {
     ragLoading.value = false;
   }
@@ -977,14 +980,14 @@ function groupChatEntries(entries: ChatEntry[]) {
         <div class="pageTitle">
           <div>
             <h1>知识库</h1>
-            <p>上传内部资料，系统会切分、索引，并作为 Agent 的检索工具。</p>
+            <p>向内部资料提问，AI 会先召回相关片段，再整理成可读建议。</p>
           </div>
-          <button class="ghostButton" :disabled="ragLoading" @click="loadRagDocuments">刷新</button>
+          <button v-if="user?.role === 'admin'" class="ghostButton" :disabled="ragLoading" @click="loadRagDocuments">刷新</button>
         </div>
         <p v-if="ragError" class="inlineError">{{ ragError }}</p>
         <p v-if="ragStatus" class="inlineSuccess">{{ ragStatus }}</p>
-        <div class="ragGrid">
-          <form class="sideForm" @submit.prevent="uploadRagDocument">
+        <div :class="user?.role === 'admin' ? 'ragGrid' : 'ragGrid readerOnly'">
+          <form v-if="user?.role === 'admin'" class="sideForm" @submit.prevent="uploadRagDocument">
             <h2>上传文档</h2>
             <label>
               类目
@@ -1004,14 +1007,19 @@ function groupChatEntries(entries: ChatEntry[]) {
           <div class="ragMain">
             <section class="ragSearchPanel">
               <form class="ragSearchForm" @submit.prevent="searchRagDocuments">
-                <input v-model="ragQuery" placeholder="搜索内部知识库" />
+                <input v-model="ragQuery" placeholder="向内部知识库提问" />
                 <select v-model="ragSearchCategory">
                   <option value="">全部类目</option>
                   <option v-for="item in ragCategories" :key="item" :value="item">{{ item }}</option>
                 </select>
-                <button class="primaryButton" :disabled="ragLoading">检索</button>
+                <button class="primaryButton" :disabled="ragLoading">{{ ragLoading ? "生成中" : "提问" }}</button>
               </form>
+              <article v-if="ragAnswer" class="ragAnswerCard markdownBody" v-html="renderMarkdown(ragAnswer)" />
               <div v-if="ragResults.length" class="ragSearchResults">
+                <div class="listHeader">
+                  <strong>召回片段</strong>
+                  <span>用于调试知识库命中情况</span>
+                </div>
                 <article v-for="(item, index) in ragResults" :key="`${item.metadata.document_id}-${item.metadata.chunk_index}-${index}`" class="ragResultCard">
                   <div class="trendHeader">
                     <strong>{{ item.metadata.filename || "知识片段" }}</strong>
@@ -1027,7 +1035,7 @@ function groupChatEntries(entries: ChatEntry[]) {
               <div v-else class="emptyState compactEmpty">暂无检索结果。</div>
             </section>
 
-            <section class="ragDocuments">
+            <section v-if="user?.role === 'admin'" class="ragDocuments">
               <div class="listHeader">
                 <strong>文档列表</strong>
                 <span>{{ ragDocuments.length }} 份文档</span>

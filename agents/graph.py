@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from .router_agent import RouterAgent
 from .requirement_agent import RequirementAgent
 from .product_consultant_agent import ProductConsultantAgent
+from metrics import measure_ms, record_metric
 
 # 图状态
 class AgentState(TypedDict):
@@ -236,30 +237,40 @@ class TrendLogicGraph:
         message_count = 0
 
         yield _status_payload("router", "我正在识别你的问题属于哪个运营场景。")
-        state = router_node(state)
-        yield _step_payload("router", state, message_count)
+        with measure_ms() as timing:
+            state = router_node(state)
+        record_metric("agent.node", timing["latency_ms"], route="router", metadata={"node": "router"})
+        yield _step_payload("router", state, message_count, timing["latency_ms"])
         message_count = len(state.get("messages", []))
 
         if route_after_router(state) == "out_of_scope":
             yield _status_payload("out_of_scope", "我会给出话题范围提示，避免你继续等无关流程。")
-            state = out_of_scope_node(state)
-            yield _step_payload("out_of_scope", state, message_count)
+            with measure_ms() as timing:
+                state = out_of_scope_node(state)
+            record_metric("agent.node", timing["latency_ms"], route="out_of_scope", metadata={"node": "out_of_scope"})
+            yield _step_payload("out_of_scope", state, message_count, timing["latency_ms"])
             return state
 
         yield _status_payload("requirement_node", "我正在提取平台、类目、预算、目标用户和经营目标。")
-        state = requirement_node(state)
-        yield _step_payload("requirement_node", state, message_count)
+        with measure_ms() as timing:
+            state = requirement_node(state)
+        record_metric("agent.node", timing["latency_ms"], route="requirement_node", metadata={"node": "requirement_node"})
+        yield _step_payload("requirement_node", state, message_count, timing["latency_ms"])
         message_count = len(state.get("messages", []))
 
         if route_after_requirement(state) == "ask_follow_up":
             yield _status_payload("ask_follow_up", "我会只追问当前最关键的缺口，尽量减少打扰。")
-            state = ask_follow_up_node(state)
-            yield _step_payload("ask_follow_up", state, message_count)
+            with measure_ms() as timing:
+                state = ask_follow_up_node(state)
+            record_metric("agent.node", timing["latency_ms"], route="ask_follow_up", metadata={"node": "ask_follow_up"})
+            yield _step_payload("ask_follow_up", state, message_count, timing["latency_ms"])
             return state
 
-        yield _status_payload("product_consultant", "我正在结合需求、记忆和工具结果生成选品建议。")
-        state = product_consultant_node(state)
-        yield _step_payload("product_consultant", state, message_count)
+        yield _status_payload("product_consultant", "我会先检索知识库和已有资料，再把召回内容整理成可执行建议。")
+        with measure_ms() as timing:
+            state = product_consultant_node(state)
+        record_metric("agent.node", timing["latency_ms"], route="product_consultant", metadata={"node": "product_consultant"})
+        yield _step_payload("product_consultant", state, message_count, timing["latency_ms"])
         return state
 
 
@@ -279,9 +290,10 @@ def _status_payload(node: str, content: str) -> dict:
     }
 
 
-def _step_payload(node: str, state: AgentState, previous_message_count: int) -> dict:
+def _step_payload(node: str, state: AgentState, previous_message_count: int, latency_ms: float = 0.0) -> dict:
     return {
         "node": node,
         "state": state,
         "new_messages": state.get("messages", [])[previous_message_count:],
+        "latency_ms": latency_ms,
     }
