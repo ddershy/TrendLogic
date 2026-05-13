@@ -51,6 +51,7 @@ const chatEntries = ref<ChatEntry[]>([]);
 const sessionId = ref<string | null>(null);
 const chatText = ref("");
 const chatLoading = ref(false);
+const showPendingAnalysis = ref(false);
 const chatError = ref("");
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const historyLoading = ref(false);
@@ -80,6 +81,7 @@ const memoryError = ref("");
 const memoryStatus = ref("");
 const recallItems = ref<RecallCandidate[]>([]);
 const recallMessage = ref("");
+const recallGeneratingUserId = ref("");
 const adminError = ref("");
 
 const navItems = computed(() => [
@@ -93,7 +95,7 @@ const navItems = computed(() => [
 const visibleNavItems = computed(() => navItems.value.filter((item) => !item.adminOnly || user.value?.role === "admin"));
 const selectedMemoryUser = computed(() => insights.value.find((item) => item.user_id === selectedMemoryUserId.value) ?? null);
 const visibleChatEntries = computed(() =>
-  chatLoading.value
+  chatLoading.value && showPendingAnalysis.value
     ? [
         ...chatEntries.value,
         {
@@ -238,22 +240,38 @@ async function sendMessage() {
   chatError.value = "";
   chatEntries.value.push({ id: crypto.randomUUID(), role: "user", content: text });
   chatLoading.value = true;
+  showPendingAnalysis.value = true;
+  let finalEntryId = "";
   try {
-    const response = await api.sendMessage(text, sessionId.value);
-    sessionId.value = response.session_id;
-    for (const message of response.messages) {
-      chatEntries.value.push(
-        message.type === "process"
-          ? { id: crypto.randomUUID(), role: "assistant", content: message.content, trace: message }
-          : { id: crypto.randomUUID(), role: "assistant", content: message.content }
-      );
-    }
+    await api.sendMessageStream(text, sessionId.value, (event) => {
+      if (event.event === "session" || event.event === "done") {
+        sessionId.value = event.session_id;
+        return;
+      }
+      showPendingAnalysis.value = false;
+      if (event.event === "process") {
+        chatEntries.value.push({ id: crypto.randomUUID(), role: "assistant", content: event.message.content, trace: event.message });
+        return;
+      }
+      if (event.event === "final_start") {
+        finalEntryId = crypto.randomUUID();
+        chatEntries.value.push({ id: finalEntryId, role: "assistant", content: "" });
+        return;
+      }
+      if (event.event === "final_delta") {
+        const target = chatEntries.value.find((entry) => entry.id === finalEntryId);
+        if (target) {
+          target.content += event.content;
+        }
+      }
+    });
     await loadChatSessions();
     await loadCurrentMemoryContext();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "发送失败";
   } finally {
     chatLoading.value = false;
+    showPendingAnalysis.value = false;
   }
 }
 
@@ -445,11 +463,21 @@ async function switchView(view: ViewName) {
 }
 
 async function generateRecall(userId: string) {
+  recallGeneratingUserId.value = userId;
+  adminError.value = "";
   try {
     const result = await api.generateRecall(userId);
-    recallMessage.value = result.message;
+    const meta = [
+      result.reason ? `生成理由：${result.reason}` : "",
+      result.recommended_channel ? `建议渠道：${result.recommended_channel}` : "",
+      result.timing ? `建议时机：${result.timing}` : ""
+    ].filter(Boolean);
+    recallMessage.value = meta.length ? `${result.message}\n\n${meta.join("\n")}` : result.message;
+    await loadRecall();
   } catch (error) {
     adminError.value = error instanceof Error ? error.message : "生成失败";
+  } finally {
+    recallGeneratingUserId.value = "";
   }
 }
 
@@ -871,10 +899,12 @@ function groupChatEntries(entries: ChatEntry[]) {
         <div class="pageTitle">
           <div>
             <h1>一键召回</h1>
-            <p>根据用户画像、活跃度和近期爆品生成召回文案。</p>
+            <p>先刷新候选用户，再为单个用户生成可复制的召回文案。</p>
           </div>
+          <button class="ghostButton" type="button" @click="loadRecall">刷新候选</button>
         </div>
         <p v-if="adminError" class="inlineError">{{ adminError }}</p>
+        <div v-if="!recallItems.length" class="emptyState">暂无可召回用户。可以先用普通账号对话几轮，再回到这里刷新候选。</div>
         <div class="recallGrid">
           <article v-for="item in recallItems" :key="item.user_id" class="trendCard">
             <div class="trendHeader">
@@ -885,8 +915,11 @@ function groupChatEntries(entries: ChatEntry[]) {
             <div class="tagRow">
               <span>{{ item.account_id }}</span>
               <span v-for="tag in item.preferred_categories" :key="tag">{{ tag }}</span>
+              <span v-for="trend in item.matched_trends" :key="trend">匹配 {{ trend }}</span>
             </div>
-            <button class="primaryButton" @click="generateRecall(item.user_id)">生成召回口令</button>
+            <button class="primaryButton" :disabled="recallGeneratingUserId === item.user_id" @click="generateRecall(item.user_id)">
+              {{ recallGeneratingUserId === item.user_id ? "生成中" : "生成召回文案" }}
+            </button>
           </article>
         </div>
       </section>

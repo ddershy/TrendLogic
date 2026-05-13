@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import timedelta
+import time
 from pathlib import Path
 
 from django.conf import settings
-from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.hashers import check_password
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db.models import Q
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
 from agents.graph import TrendLogicGraph
+from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
 from memory.service import MemoryService
 
@@ -53,7 +54,7 @@ def register(request: HttpRequest) -> JsonResponse:
     user = User.objects.create(
         account_id=generate_account_id(),
         display_name=display_name,
-        password_hash=make_password(password),
+        password_hash=password,
         role=role,
         preferences={
             "preferred_categories": preferred_categories,
@@ -86,7 +87,7 @@ def login(request: HttpRequest) -> JsonResponse:
     identifier = str(payload.get("identifier", "")).strip()
     password = str(payload.get("password", ""))
     user = User.objects.filter(Q(account_id=identifier) | Q(display_name=identifier)).first()
-    if not user or not check_password(password, user.password_hash):
+    if not user or not verify_password(password, user.password_hash):
         return error("Invalid account or password", 401)
     return JsonResponse(auth_response(user))
 
@@ -106,25 +107,53 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     if request.method != "POST":
         return method_not_allowed()
     payload = read_json(request)
-    content = str(payload.get("content", "")).strip()
-    if not content:
-        return error("Message cannot be empty", 400)
-    session = get_or_create_session(user, payload.get("session_id"), content)
-    memory_service = MemoryService()
-    memory_context = memory_service.load_context(user, session)
-    result = TrendLogicGraph().run(content, memory_context.to_dict())
-    messages = result["messages"]
-    final_message = next((message["content"] for message in reversed(messages) if message.get("type") == "final"), "")
-    trace_messages = [message for message in messages if message.get("type") == "process"]
-    memory_service.record_interaction(
-        user=user,
-        session=session,
-        user_message=content,
-        assistant_message=final_message,
-        trace_messages=trace_messages,
-        memory_candidates=result.get("memory_candidates", []),
-    )
-    return JsonResponse({"session_id": session.id, "messages": messages})
+    content, session_or_response = prepare_chat_turn(user, payload)
+    if isinstance(session_or_response, JsonResponse):
+        return session_or_response
+    response = run_chat_graph(user, session_or_response, content)
+    return JsonResponse(response)
+
+
+@csrf_exempt
+def chat_message_stream(request: HttpRequest) -> JsonResponse | StreamingHttpResponse:
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
+    if request.method != "POST":
+        return method_not_allowed()
+    payload = read_json(request)
+    content, session_or_response = prepare_chat_turn(user, payload)
+    if isinstance(session_or_response, JsonResponse):
+        return session_or_response
+    session = session_or_response
+
+    def event_stream():
+        yield stream_event("session", {"session_id": session.id})
+        yield stream_event(
+            "process",
+            {
+                "message": {
+                    "type": "process",
+                    "agent": "系统",
+                    "function": "接收请求",
+                    "content": "我已经收到你的问题，正在读取用户记忆并进入 Agent 流程。",
+                }
+            },
+        )
+        response = run_chat_graph(user, session, content)
+        final_message = ""
+        for message in response["messages"]:
+            if message.get("type") == "process":
+                yield stream_event("process", {"message": message})
+            elif message.get("type") == "final":
+                final_message = str(message.get("content") or "")
+        yield stream_event("final_start", {"message": {"type": "final", "agent": "TrendLogic", "content": ""}})
+        for chunk in chunk_text(final_message):
+            yield stream_event("final_delta", {"content": chunk})
+            time.sleep(0.012)
+        yield stream_event("done", {"session_id": response["session_id"]})
+
+    return StreamingHttpResponse(event_stream(), content_type="application/x-ndjson; charset=utf-8")
 
 
 def chat_sessions(request: HttpRequest) -> JsonResponse:
@@ -323,22 +352,22 @@ def recall_candidates(request: HttpRequest) -> JsonResponse:
     if isinstance(admin, JsonResponse):
         return admin
     result = []
+    recall_agent = RecallAgent()
+    memory_service = MemoryService()
+    trends = [serialize_trend_for_agent(item) for item in TrendingItem.objects.filter(visibility="public").order_by("-heat_score", "-created_at")[:12]]
     for user in User.objects.exclude(role="admin"):
         profile = getattr(user, "profile", None)
-        frequency = profile.interaction_frequency if profile else 0
-        weights = profile.interest_weights if profile else {}
-        score = min(0.25 + frequency * 0.06 + len(weights) * 0.04, 0.98)
-        result.append(
-            {
-                "user_id": user.id,
-                "display_name": user.display_name,
-                "account_id": user.account_id,
+        memory = memory_service.get_or_create_memory(user)
+        assessment = recall_agent.assess_candidate(
+            user={
+                **serialize_user(user),
                 "last_active_at": iso(profile.last_active_at) if profile and profile.last_active_at else None,
-                "preferred_categories": profile.preferred_categories if profile else user.preferences.get("preferred_categories", []),
-                "recall_score": round(score, 2),
-                "reason": "基于历史关注类目、交互频率和近期爆品匹配度生成。",
-            }
+            },
+            profile=serialize_profile_for_agent(user, profile),
+            memory=serialize_memory(memory),
+            trends=trends,
         )
+        result.append(assessment.to_dict())
     return JsonResponse(sorted(result, key=lambda item: item["recall_score"], reverse=True), safe=False)
 
 
@@ -354,12 +383,27 @@ def recall_generate(request: HttpRequest) -> JsonResponse:
     if not user:
         return error("User not found", 404)
     profile = getattr(user, "profile", None)
-    trends = list(TrendingItem.objects.filter(visibility="public").order_by("-heat_score", "-created_at").values_list("title", flat=True)[:5])
-    frequency = profile.interaction_frequency if profile else 0
-    weights = profile.interest_weights if profile else {}
-    score = min(0.35 + frequency * 0.06 + len(weights) * 0.04, 0.98)
-    categories = profile.preferred_categories if profile else user.preferences.get("preferred_categories", [])
-    generated = RecallAgent().generate(user.display_name, categories, trends, score)
+    memory_service = MemoryService()
+    memory = memory_service.get_or_create_memory(user)
+    trend_items = [serialize_trend_for_agent(item) for item in TrendingItem.objects.filter(visibility="public").order_by("-heat_score", "-created_at")[:12]]
+    assessment = RecallAgent().assess_candidate(
+        user={
+            **serialize_user(user),
+            "last_active_at": iso(profile.last_active_at) if profile and profile.last_active_at else None,
+        },
+        profile=serialize_profile_for_agent(user, profile),
+        memory=serialize_memory(memory),
+        trends=trend_items,
+    )
+    generated = RecallAgent().generate(
+        user.display_name,
+        assessment.preferred_categories,
+        assessment.matched_trends,
+        assessment.recall_score,
+        profile=serialize_profile_for_agent(user, profile),
+        memory=serialize_memory(memory),
+        trending_items=trend_items,
+    )
     RecallRecord.objects.create(
         user=user,
         recall_score=generated["recall_score"],
@@ -367,7 +411,7 @@ def recall_generate(request: HttpRequest) -> JsonResponse:
         generated_message=generated["message"],
         created_by=admin,
     )
-    MemoryService().append_memory_list(
+    memory_service.append_memory_list(
         user=user,
         field_name="recall_signals",
         item={
@@ -375,6 +419,8 @@ def recall_generate(request: HttpRequest) -> JsonResponse:
             "reason": generated["reason"],
             "matched_trends": generated["matched_trends"],
             "recall_score": generated["recall_score"],
+            "recommended_channel": generated.get("recommended_channel", ""),
+            "timing": generated.get("timing", ""),
             "created_at": iso(timezone.now()),
         },
     )
@@ -437,16 +483,81 @@ def summarize_memory(request: HttpRequest, user_id: str) -> JsonResponse:
     target = User.objects.filter(id=user_id).first()
     if not target:
         return error("User not found", 404)
-    recent_sessions = ChatSession.objects.filter(user=target).order_by("-updated_at")[:5]
-    summary = "；".join(
-        session.user_transcript[:160] for session in reversed(list(recent_sessions)) if session.user_transcript
-    ) or "暂无足够对话形成长期记忆。"
-    memory = MemoryService().get_or_create_memory(target)
-    memory.long_term_summary = summary
-    memory.confidence = max(memory.confidence or 0, 0.65)
+    memory_service = MemoryService()
+    recent_sessions = list(ChatSession.objects.filter(user=target).order_by("-updated_at")[:8])
+    context = memory_service.load_context(target, recent_sessions[0] if recent_sessions else None)
+    plan = UserProfileAgent().analyze(
+        user=serialize_user(target),
+        memory_context=context.to_dict(),
+        recent_sessions=[serialize_session_detail(session) for session in recent_sessions],
+    )
+    apply_profile_update_plan(target, plan)
+    memory = memory_service.get_or_create_memory(target)
+    return JsonResponse({"status": "ok", "memory": serialize_memory(memory), "profile_update_plan": plan.to_dict()})
+
+
+def apply_profile_update_plan(user: User, plan) -> None:
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    memory = MemoryService().get_or_create_memory(user)
+
+    if plan.profile_summary:
+        profile.summary = plan.profile_summary
+    if plan.preferred_categories:
+        profile.preferred_categories = merge_unique(profile.preferred_categories, plan.preferred_categories)
+    if plan.preferred_platforms:
+        profile.preferred_platforms = merge_unique(profile.preferred_platforms, plan.preferred_platforms)
+    if plan.negative_preferences:
+        profile.negative_preferences = merge_unique(profile.negative_preferences, plan.negative_preferences)
+    if plan.interest_weights:
+        profile.interest_weights = merge_weights(profile.interest_weights, plan.interest_weights)
+    profile.recall_score = max(float(profile.recall_score or 0), float(plan.recall_score or 0))
+    profile.last_active_at = profile.last_active_at or timezone.now()
+    profile.save()
+
+    if plan.long_term_summary:
+        memory.long_term_summary = plan.long_term_summary
+    memory.preferences = merge_memory_preferences(memory.preferences, [*plan.preferred_categories, *plan.preferred_platforms])
+    memory.negative_preferences = merge_unique(memory.negative_preferences, plan.negative_preferences)
+    memory.business_needs = merge_unique(memory.business_needs, plan.business_needs)
+    memory.behavior_notes = merge_unique(memory.behavior_notes, plan.behavior_notes)
+    memory.tags = merge_unique(memory.tags, plan.tags)
+    memory.confidence = max(float(memory.confidence or 0), float(plan.confidence or 0))
     memory.last_used_at = timezone.now()
-    memory.save(update_fields=["long_term_summary", "confidence", "last_used_at", "updated_at"])
-    return JsonResponse({"status": "ok", "memory": serialize_memory(memory)})
+    memory.save()
+
+
+def prepare_chat_turn(user: User, payload: dict) -> tuple[str, ChatSession | JsonResponse]:
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        return "", error("Message cannot be empty", 400)
+    return content, get_or_create_session(user, payload.get("session_id"), content)
+
+
+def run_chat_graph(user: User, session: ChatSession, content: str) -> dict:
+    memory_service = MemoryService()
+    memory_context = memory_service.load_context(user, session)
+    result = TrendLogicGraph().run(content, memory_context.to_dict())
+    messages = result["messages"]
+    final_message = next((message["content"] for message in reversed(messages) if message.get("type") == "final"), "")
+    trace_messages = [message for message in messages if message.get("type") == "process"]
+    memory_service.record_interaction(
+        user=user,
+        session=session,
+        user_message=content,
+        assistant_message=final_message,
+        trace_messages=trace_messages,
+        memory_candidates=result.get("memory_candidates", []),
+    )
+    return {"session_id": session.id, "messages": messages}
+
+
+def stream_event(event: str, data: dict) -> str:
+    return json.dumps({"event": event, **data}, ensure_ascii=False) + "\n"
+
+
+def chunk_text(text: str, size: int = 6):
+    for index in range(0, len(text), size):
+        yield text[index : index + size]
 
 
 def read_json(request: HttpRequest) -> dict:
@@ -458,6 +569,15 @@ def read_json(request: HttpRequest) -> dict:
 
 def auth_response(user: User) -> dict:
     return {"access_token": signer.sign(user.id), "token_type": "bearer", "user": serialize_user(user)}
+
+
+def verify_password(raw_password: str, stored_password: str) -> bool:
+    if raw_password == stored_password:
+        return True
+    try:
+        return check_password(raw_password, stored_password)
+    except Exception:
+        return False
 
 
 def current_user(request: HttpRequest) -> User | None:
@@ -617,6 +737,32 @@ def serialize_memory(memory: UserMemory) -> dict:
     }
 
 
+def serialize_profile_for_agent(user: User, profile: UserProfile | None) -> dict:
+    return {
+        "user_id": user.id,
+        "summary": profile.summary if profile else "",
+        "interest_weights": profile.interest_weights if profile else {},
+        "negative_preferences": profile.negative_preferences if profile else [],
+        "preferred_platforms": profile.preferred_platforms if profile else user.preferences.get("preferred_platforms", []),
+        "preferred_categories": profile.preferred_categories if profile else user.preferences.get("preferred_categories", []),
+        "recall_score": profile.recall_score if profile else 0,
+        "interaction_frequency": profile.interaction_frequency if profile else 0,
+        "last_active_at": iso(profile.last_active_at) if profile and profile.last_active_at else None,
+        "updated_at": iso(profile.updated_at) if profile else None,
+    }
+
+
+def serialize_trend_for_agent(item: TrendingItem) -> dict:
+    return {
+        "id": item.id,
+        "title": item.title,
+        "category": item.category,
+        "summary": item.summary,
+        "heat_score": item.heat_score,
+        "tags": item.tags,
+    }
+
+
 def serialize_recall_record(record: RecallRecord) -> dict:
     return {
         "id": record.id,
@@ -635,6 +781,39 @@ def ensure_list(value: object) -> list[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
     return []
+
+
+def merge_unique(existing: object, additions: list[str], limit: int = 50) -> list[str]:
+    seen = set()
+    result = []
+    for value in [*ensure_list(existing), *ensure_list(additions)]:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result[-limit:]
+
+
+def merge_weights(existing: object, additions: dict[str, float]) -> dict[str, float]:
+    weights = dict(existing or {}) if isinstance(existing, dict) else {}
+    for key, value in additions.items():
+        label = str(key).strip()
+        if not label:
+            continue
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            score = 0.5
+        weights[label] = max(float(weights.get(label, 0)), max(0.0, min(score, 1.0)))
+    return weights
+
+
+def merge_memory_preferences(existing: object, additions: list[str]) -> dict:
+    preferences = dict(existing or {}) if isinstance(existing, dict) else {}
+    current = ensure_list(preferences.get("profile_preferences"))
+    merged = merge_unique(current, additions)
+    if merged:
+        preferences["profile_preferences"] = merged
+    return preferences
 
 
 def iso(value) -> str:

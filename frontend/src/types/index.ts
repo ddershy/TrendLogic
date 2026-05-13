@@ -85,9 +85,11 @@ export interface UserInsight {
   preferred_platforms: string[];
   summary: string;
   interest_weights: Record<string, number>;
+  negative_preferences: string[];
   recall_score: number;
   interaction_frequency: number;
   last_active_at: string | null;
+  updated_at: string | null;
 }
 
 export interface UserMemoryProfile {
@@ -116,4 +118,5 @@ export interface RecallCandidate {
   preferred_categories: string[];
   recall_score: number;
   reason: string;
+  matched_trends: string[];
 }

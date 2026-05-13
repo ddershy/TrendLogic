@@ -1,4 +1,5 @@
 import type {
+  AgentMessage,
   AuthResponse,
   ChatResponse,
   ChatSessionHistory,
@@ -54,6 +55,52 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export type ChatStreamEvent =
+  | { event: "session"; session_id: string }
+  | { event: "process"; message: AgentMessage }
+  | { event: "final_start"; message: AgentMessage }
+  | { event: "final_delta"; content: string }
+  | { event: "done"; session_id: string };
+
+async function requestStream(path: string, body: unknown, onEvent: (event: ChatStreamEvent) => void) {
+  const token = getToken();
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  if (!response.ok || !response.body) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorBody.detail ?? "请求失败");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const text = line.trim();
+      if (text) {
+        onEvent(JSON.parse(text) as ChatStreamEvent);
+      }
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) {
+    onEvent(JSON.parse(tail) as ChatStreamEvent);
+  }
+}
+
 export const api = {
   me: () => request<User>("/auth/me"),
   login: (identifier: string, password: string) =>
@@ -78,6 +125,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, session_id })
     }),
+  sendMessageStream: (content: string, session_id: string | null | undefined, onEvent: (event: ChatStreamEvent) => void) =>
+    requestStream("/chat/message/stream", { content, session_id }, onEvent),
   listChatSessions: () => request<ChatSessionSummary[]>("/chat/sessions"),
   getChatHistory: (session_id: string) =>
     request<ChatSessionHistory>(`/chat/history?session_id=${encodeURIComponent(session_id)}`),
@@ -113,13 +162,23 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   summarizeUserMemory: (user_id: string) =>
-    request<{ status: string; memory: UserMemoryProfile }>(`/users/${user_id}/memory/summarize`, {
+    request<{ status: string; memory: UserMemoryProfile; profile_update_plan?: Record<string, unknown> }>(
+      `/users/${user_id}/memory/summarize`,
+      {
       method: "POST",
       body: JSON.stringify({})
-    }),
+      }
+    ),
   recallCandidates: () => request<RecallCandidate[]>("/recall/candidates"),
   generateRecall: (user_id: string) =>
-    request<{ message: string; recall_score: number; matched_trends: string[]; reason: string }>("/recall/generate", {
+    request<{
+      message: string;
+      recall_score: number;
+      matched_trends: string[];
+      reason: string;
+      recommended_channel?: string;
+      timing?: string;
+    }>("/recall/generate", {
       method: "POST",
       body: JSON.stringify({ user_id })
     })

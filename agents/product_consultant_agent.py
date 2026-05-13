@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from .llm_client import LLMClient
@@ -13,11 +14,53 @@ PRODUCT_CONSULTANT_PROMPT = """
 你可以明确说明哪些是假设，并给出低风险试错方案。
 
 输出要求：
-- 用中文直接给用户建议；
-- 不要输出 JSON；
-- 结构清晰，包含：方向判断、建议优先级、预算/试错建议、下一步动作；
+- 你只能输出 JSON，不要输出 Markdown；
+- 建议必须具体，不能只说“结合趋势分析”；
+- 包含：方向判断、建议优先级、预算/试错建议、风险提示、下一步动作；
 - 如果目标用户不明确，给出 2-3 个可测试用户假设，不要把问题再抛回给用户。
+
+JSON 格式：
+{
+  "process_message": "我会基于平台、预算、类目和用户记忆生成低风险选品方案。",
+  "assumptions": ["目标用户暂按学生党和轻度二次元用户处理"],
+  "recommendations": [
+    {
+      "direction": "亚克力挂件/吧唧小套装",
+      "reason": "展示性强，适合小红书图文和开箱内容",
+      "test_budget": "1000-1500",
+      "risk_level": "低"
+    }
+  ],
+  "risk_notes": ["不要一开始压太多库存"],
+  "next_actions": ["先选 3 个 SKU 做内容测试"],
+  "memory_candidates": [
+    {
+      "candidate_type": "business_need",
+      "content": "用户希望用 5000 元预算测试小红书二次元周边选品",
+      "tags": ["小红书", "二次元周边"]
+    }
+  ]
+}
 """.strip()
+
+
+@dataclass
+class ProductRecommendation:
+    direction: str
+    reason: str
+    test_budget: str = ""
+    risk_level: str = ""
+
+
+@dataclass
+class ProductConsultantResult:
+    final_message: str
+    process_message: str
+    recommendations: list[ProductRecommendation] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    risk_notes: list[str] = field(default_factory=list)
+    next_actions: list[str] = field(default_factory=list)
+    memory_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ProductConsultantAgent:
@@ -29,10 +72,15 @@ class ProductConsultantAgent:
         except Exception:
             self.llm_client = None
 
-    def run(self, requirement_profile: dict[str, Any], memory_context: dict[str, Any] | None = None) -> str:
+    def run(
+        self,
+        requirement_profile: dict[str, Any],
+        memory_context: dict[str, Any] | None = None,
+        trend_context: dict[str, Any] | None = None,
+    ) -> ProductConsultantResult:
         if self.llm_client and self.llm_client.is_configured:
             try:
-                return self.llm_client.chat(
+                result = self.llm_client.chat_json(
                     [
                         {"role": "system", "content": PRODUCT_CONSULTANT_PROMPT},
                         {
@@ -41,31 +89,142 @@ class ProductConsultantAgent:
                                 {
                                     "requirement_profile": requirement_profile,
                                     "memory_context": memory_context or {},
+                                    "trend_context": trend_context or {"trending_items": []},
                                 },
                                 ensure_ascii=False,
                             ),
                         },
                     ]
                 )
+                return self.normalize_result(result)
             except Exception:
                 pass
         return self._fallback(requirement_profile, memory_context or {})
 
-    def _fallback(self, profile: dict[str, Any], memory_context: dict[str, Any]) -> str:
+    def normalize_result(self, result: dict[str, Any]) -> ProductConsultantResult:
+        recommendations = []
+        for item in _ensure_list_of_dict(result.get("recommendations")):
+            recommendations.append(
+                ProductRecommendation(
+                    direction=str(item.get("direction") or "").strip(),
+                    reason=str(item.get("reason") or "").strip(),
+                    test_budget=str(item.get("test_budget") or "").strip(),
+                    risk_level=str(item.get("risk_level") or "").strip(),
+                )
+            )
+        assumptions = _ensure_list(result.get("assumptions"))
+        risk_notes = _ensure_list(result.get("risk_notes"))
+        next_actions = _ensure_list(result.get("next_actions"))
+        memory_candidates = _ensure_list_of_dict(result.get("memory_candidates"))
+        process_message = str(result.get("process_message") or "我会基于现有需求生成选品建议。").strip()
+        final_message = self._compose_final_message(recommendations, assumptions, risk_notes, next_actions)
+        return ProductConsultantResult(
+            final_message=final_message,
+            process_message=process_message,
+            recommendations=recommendations,
+            assumptions=assumptions,
+            risk_notes=risk_notes,
+            next_actions=next_actions,
+            memory_candidates=memory_candidates,
+        )
+
+    def _fallback(self, profile: dict[str, Any], memory_context: dict[str, Any]) -> ProductConsultantResult:
         platform = profile.get("target_platform") or "你主要经营的平台"
         category = profile.get("target_category") or "当前类目"
         budget = profile.get("budget_range") or "小预算"
         audience = profile.get("target_audience") or "待验证用户群体"
         preferences = memory_context.get("preferences") or []
-        preference_text = f"我会参考你之前偏好的 {', '.join(preferences[:3])}。" if preferences else ""
-
-        return (
-            f"可以，我先按现有信息给你一个可执行判断。{preference_text}\n\n"
-            f"方向判断：{category} 可以先在 {platform} 做小批量内容测试，预算按 {budget} 控制，不建议一开始重库存。\n\n"
-            "优先测试 3 个方向：\n"
-            f"1. 面向“{audience}”的高展示性单品，适合先看点击、收藏和评论；\n"
-            "2. 低客单价组合装，用来提高转化率和降低用户决策成本；\n"
-            "3. 有内容话题的细分款，比如开箱、对比、场景化使用更容易讲清楚的商品。\n\n"
-            "预算建议：先把 60% 用在 3-5 个商品的小样和素材测试，30% 留给表现最好的方向补内容，10% 做备用。\n\n"
-            "下一步动作：先选 3 个候选商品，各发 2 条内容，观察收藏率、评论里的购买意图和私信咨询，再决定是否进货。"
+        assumptions = []
+        if not profile.get("target_audience"):
+            assumptions = [f"目标用户先按“{audience}”处理，后续可以根据内容数据再细分"]
+        if preferences:
+            assumptions.append(f"参考用户历史偏好：{', '.join(str(item) for item in preferences[:3])}")
+        recommendations = [
+            ProductRecommendation(
+                direction=f"{category} 的高展示性单品",
+                reason=f"适合在 {platform} 做图文、短视频或开箱内容，先看收藏和评论意向。",
+                test_budget="总预算的 30%-40%",
+                risk_level="低",
+            ),
+            ProductRecommendation(
+                direction="低客单价组合装",
+                reason="能降低用户决策成本，也方便做限量、套装和场景化种草。",
+                test_budget="总预算的 20%-30%",
+                risk_level="中低",
+            ),
+            ProductRecommendation(
+                direction="带话题属性的细分款",
+                reason="优先选择有梗、有场景、有对比点的 SKU，内容更容易被用户记住。",
+                test_budget="总预算的 20%",
+                risk_level="中",
+            ),
+        ]
+        risk_notes = [
+            "不要一开始重库存，先用少量 SKU 验证内容数据。",
+            "如果连续 3-5 条内容没有收藏和评论意向，就及时换方向。",
+        ]
+        next_actions = [
+            "先选 3 个候选商品，每个商品准备 2 条内容素材。",
+            "记录点击、收藏、评论购买意向和私信咨询。",
+            f"预算按 {budget} 控制，先把钱花在样品、素材和小批量测试上。",
+        ]
+        memory_candidates = [
+            {
+                "candidate_type": "business_need",
+                "content": f"用户希望用 {budget} 预算在 {platform} 测试 {category} 选品。",
+                "source_agent": "product_consultant_agent",
+                "confidence": 0.72,
+                "tags": [str(item) for item in [platform, category] if item],
+            }
+        ]
+        return ProductConsultantResult(
+            final_message=self._compose_final_message(recommendations, assumptions, risk_notes, next_actions),
+            process_message="我会基于现有需求和用户记忆，直接给出低风险选品测试方案。",
+            recommendations=recommendations,
+            assumptions=assumptions,
+            risk_notes=risk_notes,
+            next_actions=next_actions,
+            memory_candidates=memory_candidates,
         )
+
+    def _compose_final_message(
+        self,
+        recommendations: list[ProductRecommendation],
+        assumptions: list[str],
+        risk_notes: list[str],
+        next_actions: list[str],
+    ) -> str:
+        lines = ["可以，我先按现有信息给你一版可执行的选品建议。"]
+        if assumptions:
+            lines.append("\n### 判断前提")
+            lines.extend(f"- {item}" for item in assumptions)
+        if recommendations:
+            lines.append("\n### 优先测试方向")
+            for index, item in enumerate(recommendations, start=1):
+                detail = f"{index}. **{item.direction}**：{item.reason}"
+                if item.test_budget:
+                    detail += f" 预算：{item.test_budget}。"
+                if item.risk_level:
+                    detail += f" 风险：{item.risk_level}。"
+                lines.append(detail)
+        if risk_notes:
+            lines.append("\n### 风险提醒")
+            lines.extend(f"- {item}" for item in risk_notes)
+        if next_actions:
+            lines.append("\n### 下一步动作")
+            lines.extend(f"{index}. {item}" for index, item in enumerate(next_actions, start=1))
+        return "\n".join(lines)
+
+
+def _ensure_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _ensure_list_of_dict(value: object) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []

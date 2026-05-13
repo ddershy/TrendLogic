@@ -781,6 +781,7 @@ textarea {
 
 .messageDialog p {
   line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 840px) {

@@ -12,6 +12,7 @@ urlpatterns = [
     path("api/auth/login", views.login),
     path("api/auth/me", views.me),
     path("api/chat/message", views.chat_message),
+    path("api/chat/message/stream", views.chat_message_stream),
     path("api/chat/sessions", views.chat_sessions),
     path("api/chat/session", views.create_chat_session),
     path("api/chat/history", views.chat_history),
