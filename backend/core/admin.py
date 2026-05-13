@@ -89,7 +89,7 @@ class TrendingItemAdmin(admin.ModelAdmin):
 
 @admin.register(UploadedDocument)
 class UploadedDocumentAdmin(admin.ModelAdmin):
-    list_display = ("filename", "category", "visibility", "vectorized", "uploaded_by", "created_at")
+    list_display = ("filename", "category", "visibility", "vectorized", "chunk_count", "uploaded_by", "created_at")
     list_filter = ("category", "visibility", "vectorized", "created_at")
     search_fields = ("filename", "file_path", "uploaded_by__display_name")
     list_editable = ("vectorized",)

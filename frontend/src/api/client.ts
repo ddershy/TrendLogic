@@ -5,8 +5,10 @@ import type {
   ChatSessionHistory,
   ChatSessionSummary,
   MemoryContext,
+  RAGSearchResult,
   RecallCandidate,
   TrendingItem,
+  UploadedDocument,
   User,
   UserInsight,
   UserMemoryProfile
@@ -189,5 +191,29 @@ export const api = {
     }>("/recall/generate", {
       method: "POST",
       body: JSON.stringify({ user_id })
+    }),
+  listRagDocuments: () => request<UploadedDocument[]>("/admin/rag/documents"),
+  uploadRagDocument: (file: File, category: string) => {
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("category", category);
+    return request<UploadedDocument>("/admin/rag/upload", {
+      method: "POST",
+      body: formData
+    });
+  },
+  deleteRagDocument: (document_id: string) =>
+    request<void>(`/admin/rag/documents/${encodeURIComponent(document_id)}`, {
+      method: "DELETE"
+    }),
+  reindexRagDocument: (document_id: string) =>
+    request<UploadedDocument>(`/admin/rag/documents/${encodeURIComponent(document_id)}/index`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  searchRag: (query: string, top_k = 5, category?: string) =>
+    request<{ query: string; results: RAGSearchResult[] }>("/admin/rag/search", {
+      method: "POST",
+      body: JSON.stringify({ query, top_k, category: category || undefined })
     })
 };

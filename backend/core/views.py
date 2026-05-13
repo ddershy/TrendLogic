@@ -18,6 +18,7 @@ from agents.graph import TrendLogicGraph
 from agents.user_profile_agent import UserProfileAgent
 from agents.user_recall_agent import RecallAgent
 from memory.service import MemoryService
+from rag import RAGService
 
 from .models import (
     ChatSession,
@@ -386,7 +387,22 @@ def rag_upload(request: HttpRequest) -> JsonResponse:
         category=request.POST.get("category", "选品资料"),
         uploaded_by=admin,
     )
-    return JsonResponse(serialize_document(document), status=201)
+    result = RAGService().add_document(
+        str(target),
+        metadata={
+            "document_id": document.id,
+            "filename": document.filename,
+            "category": document.category,
+            "visibility": document.visibility,
+            "uploaded_by": admin.id,
+        },
+        document=document,
+        replace_document=True,
+    )
+    document.vectorized = result["chunks"] > 0
+    document.chunk_count = result["chunks"]
+    document.save(update_fields=["vectorized", "chunk_count"])
+    return JsonResponse({**serialize_document(document), "index_result": result}, status=201)
 
 
 def rag_documents(request: HttpRequest) -> JsonResponse:
@@ -395,6 +411,73 @@ def rag_documents(request: HttpRequest) -> JsonResponse:
         return admin
     documents = UploadedDocument.objects.order_by("-created_at")
     return JsonResponse([serialize_document(document) for document in documents], safe=False)
+
+
+@csrf_exempt
+def rag_document_detail(request: HttpRequest, document_id: str) -> JsonResponse | HttpResponse:
+    admin = require_admin(request)
+    if isinstance(admin, JsonResponse):
+        return admin
+    document = UploadedDocument.objects.filter(id=document_id).first()
+    if not document:
+        return error("Document not found", 404)
+    if request.method == "DELETE":
+        file_path = Path(document.file_path)
+        RAGService().delete_document(document.id)
+        document.delete()
+        if file_path.exists():
+            file_path.unlink()
+        return HttpResponse(status=204)
+    return method_not_allowed()
+
+
+@csrf_exempt
+def rag_document_index(request: HttpRequest, document_id: str) -> JsonResponse:
+    admin = require_admin(request)
+    if isinstance(admin, JsonResponse):
+        return admin
+    if request.method != "POST":
+        return method_not_allowed()
+    document = UploadedDocument.objects.filter(id=document_id).first()
+    if not document:
+        return error("Document not found", 404)
+    if not Path(document.file_path).exists():
+        return error("Document file is missing", 404)
+    result = RAGService().add_document(
+        document.file_path,
+        metadata={
+            "document_id": document.id,
+            "filename": document.filename,
+            "category": document.category,
+            "visibility": document.visibility,
+            "uploaded_by": document.uploaded_by_id,
+        },
+        document=document,
+        replace_document=True,
+    )
+    document.vectorized = result["chunks"] > 0
+    document.chunk_count = result["chunks"]
+    document.save(update_fields=["vectorized", "chunk_count"])
+    return JsonResponse({**serialize_document(document), "index_result": result})
+
+
+@csrf_exempt
+def rag_search(request: HttpRequest) -> JsonResponse:
+    admin = require_admin(request)
+    if isinstance(admin, JsonResponse):
+        return admin
+    if request.method != "POST":
+        return method_not_allowed()
+    payload = read_json(request)
+    query = str(payload.get("query", "")).strip()
+    if not query:
+        return error("Query is required", 400)
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    category = str(payload.get("category", "")).strip()
+    if category:
+        filters["category"] = category
+    results = RAGService().search(query, top_k=int(payload.get("top_k", 5)), filters=filters)
+    return JsonResponse({"query": query, "results": results})
 
 
 def recall_candidates(request: HttpRequest) -> JsonResponse:
@@ -778,6 +861,7 @@ def serialize_document(document: UploadedDocument) -> dict:
         "category": document.category,
         "visibility": document.visibility,
         "vectorized": document.vectorized,
+        "chunk_count": document.chunk_count,
         "created_at": iso(document.created_at),
     }
 

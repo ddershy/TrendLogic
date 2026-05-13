@@ -4,14 +4,16 @@ import { api, setToken } from "./api/client";
 import type {
   AgentMessage,
   ChatSessionSummary,
+  RAGSearchResult,
   RecallCandidate,
   TrendingItem,
+  UploadedDocument,
   User,
   UserInsight,
   UserMemoryProfile
 } from "./types";
 
-type ViewName = "chat" | "trending" | "user-insights" | "memory" | "recall";
+type ViewName = "chat" | "trending" | "user-insights" | "memory" | "recall" | "rag";
 type AuthMode = "login" | "register";
 
 interface ChatEntry {
@@ -81,13 +83,25 @@ const recallItems = ref<RecallCandidate[]>([]);
 const recallMessage = ref("");
 const recallGeneratingUserId = ref("");
 const adminError = ref("");
+const ragDocuments = ref<UploadedDocument[]>([]);
+const ragFile = ref<File | null>(null);
+const ragCategory = ref("选品资料");
+const ragQuery = ref("");
+const ragSearchCategory = ref("");
+const ragResults = ref<RAGSearchResult[]>([]);
+const ragLoading = ref(false);
+const ragIndexingId = ref("");
+const ragDeletingId = ref("");
+const ragStatus = ref("");
+const ragError = ref("");
 
 const navItems = computed(() => [
   { key: "chat" as const, label: "智能运营台", adminOnly: false },
   { key: "trending" as const, label: "最新爆品", adminOnly: false },
   { key: "user-insights" as const, label: "用户洞察", adminOnly: true },
   { key: "memory" as const, label: "记忆档案", adminOnly: true },
-  { key: "recall" as const, label: "一键召回", adminOnly: true }
+  { key: "recall" as const, label: "一键召回", adminOnly: true },
+  { key: "rag" as const, label: "知识库", adminOnly: true }
 ]);
 
 const visibleNavItems = computed(() => navItems.value.filter((item) => !item.adminOnly || user.value?.role === "admin"));
@@ -122,6 +136,13 @@ const visibleCategories = computed(() => {
 const filteredTrendingItems = computed(() =>
   activeCategory.value === "全部" ? trendingItems.value : trendingItems.value.filter((item) => item.category === activeCategory.value)
 );
+const ragCategories = computed(() => {
+  const names = new Set(["选品资料", "平台规则", "运营案例", "用户研究"]);
+  for (const document of ragDocuments.value) {
+    names.add(document.category);
+  }
+  return Array.from(names);
+});
 
 onMounted(async () => {
   try {
@@ -462,6 +483,96 @@ async function loadRecall() {
   }
 }
 
+async function loadRagDocuments() {
+  if (user.value?.role !== "admin") return;
+  ragLoading.value = true;
+  ragError.value = "";
+  try {
+    ragDocuments.value = await api.listRagDocuments();
+  } catch (error) {
+    ragError.value = error instanceof Error ? error.message : "知识库加载失败";
+  } finally {
+    ragLoading.value = false;
+  }
+}
+
+function selectRagFile(event: Event) {
+  const target = event.target as HTMLInputElement;
+  ragFile.value = target.files?.[0] ?? null;
+}
+
+async function uploadRagDocument() {
+  if (!ragFile.value) {
+    ragError.value = "请选择要上传的文档";
+    return;
+  }
+  ragLoading.value = true;
+  ragError.value = "";
+  ragStatus.value = "";
+  try {
+    const document = await api.uploadRagDocument(ragFile.value, ragCategory.value);
+    ragDocuments.value = [document, ...ragDocuments.value.filter((item) => item.id !== document.id)];
+    ragStatus.value = `已上传并索引 ${document.chunk_count} 个分块`;
+    ragFile.value = null;
+  } catch (error) {
+    ragError.value = error instanceof Error ? error.message : "上传或索引失败";
+  } finally {
+    ragLoading.value = false;
+  }
+}
+
+async function reindexRagDocument(document: UploadedDocument) {
+  ragIndexingId.value = document.id;
+  ragError.value = "";
+  ragStatus.value = "";
+  try {
+    const updated = await api.reindexRagDocument(document.id);
+    ragDocuments.value = ragDocuments.value.map((item) => (item.id === updated.id ? updated : item));
+    ragStatus.value = `已重建索引：${updated.chunk_count} 个分块`;
+  } catch (error) {
+    ragError.value = error instanceof Error ? error.message : "重建索引失败";
+  } finally {
+    ragIndexingId.value = "";
+  }
+}
+
+async function deleteRagDocument(document: UploadedDocument) {
+  const confirmed = window.confirm(`确定删除“${document.filename}”吗？`);
+  if (!confirmed) return;
+  ragDeletingId.value = document.id;
+  ragError.value = "";
+  ragStatus.value = "";
+  try {
+    await api.deleteRagDocument(document.id);
+    ragDocuments.value = ragDocuments.value.filter((item) => item.id !== document.id);
+    ragResults.value = ragResults.value.filter((item) => item.metadata.document_id !== document.id);
+    ragStatus.value = "文档已删除";
+  } catch (error) {
+    ragError.value = error instanceof Error ? error.message : "删除文档失败";
+  } finally {
+    ragDeletingId.value = "";
+  }
+}
+
+async function searchRagDocuments() {
+  if (!ragQuery.value.trim()) {
+    ragError.value = "请输入检索问题";
+    return;
+  }
+  ragLoading.value = true;
+  ragError.value = "";
+  ragStatus.value = "";
+  try {
+    const response = await api.searchRag(ragQuery.value.trim(), 5, ragSearchCategory.value || undefined);
+    ragResults.value = response.results;
+    ragStatus.value = `检索完成，命中 ${response.results.length} 个分块`;
+  } catch (error) {
+    ragError.value = error instanceof Error ? error.message : "检索失败";
+  } finally {
+    ragLoading.value = false;
+  }
+}
+
 async function switchView(view: ViewName) {
   currentView.value = view;
   if (view === "trending") await loadTrending();
@@ -469,6 +580,7 @@ async function switchView(view: ViewName) {
   if (view === "user-insights") await loadInsights();
   if (view === "memory") await loadMemoryModule();
   if (view === "recall") await loadRecall();
+  if (view === "rag") await loadRagDocuments();
 }
 
 async function generateRecall(userId: string) {
@@ -858,6 +970,90 @@ function groupChatEntries(entries: ChatEntry[]) {
               {{ memorySaving ? "保存中" : "保存记忆档案" }}
             </button>
           </form>
+        </div>
+      </section>
+
+      <section v-if="currentView === 'rag'" class="page">
+        <div class="pageTitle">
+          <div>
+            <h1>知识库</h1>
+            <p>上传内部资料，系统会切分、索引，并作为 Agent 的检索工具。</p>
+          </div>
+          <button class="ghostButton" :disabled="ragLoading" @click="loadRagDocuments">刷新</button>
+        </div>
+        <p v-if="ragError" class="inlineError">{{ ragError }}</p>
+        <p v-if="ragStatus" class="inlineSuccess">{{ ragStatus }}</p>
+        <div class="ragGrid">
+          <form class="sideForm" @submit.prevent="uploadRagDocument">
+            <h2>上传文档</h2>
+            <label>
+              类目
+              <select v-model="ragCategory">
+                <option v-for="item in ragCategories" :key="item" :value="item">{{ item }}</option>
+              </select>
+            </label>
+            <label>
+              文件
+              <input class="fileInput" type="file" accept=".txt,.md,.csv,.json" @change="selectRagFile" />
+            </label>
+            <button class="primaryButton" :disabled="ragLoading || !ragFile">
+              {{ ragLoading ? "处理中" : "上传并索引" }}
+            </button>
+          </form>
+
+          <div class="ragMain">
+            <section class="ragSearchPanel">
+              <form class="ragSearchForm" @submit.prevent="searchRagDocuments">
+                <input v-model="ragQuery" placeholder="搜索内部知识库" />
+                <select v-model="ragSearchCategory">
+                  <option value="">全部类目</option>
+                  <option v-for="item in ragCategories" :key="item" :value="item">{{ item }}</option>
+                </select>
+                <button class="primaryButton" :disabled="ragLoading">检索</button>
+              </form>
+              <div v-if="ragResults.length" class="ragSearchResults">
+                <article v-for="(item, index) in ragResults" :key="`${item.metadata.document_id}-${item.metadata.chunk_index}-${index}`" class="ragResultCard">
+                  <div class="trendHeader">
+                    <strong>{{ item.metadata.filename || "知识片段" }}</strong>
+                    <span>{{ Math.round(item.score * 100) }}分</span>
+                  </div>
+                  <p>{{ item.text }}</p>
+                  <div class="tagRow">
+                    <span>{{ item.metadata.category || "未分类" }}</span>
+                    <span>分块 {{ item.metadata.chunk_index ?? index }}</span>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="emptyState compactEmpty">暂无检索结果。</div>
+            </section>
+
+            <section class="ragDocuments">
+              <div class="listHeader">
+                <strong>文档列表</strong>
+                <span>{{ ragDocuments.length }} 份文档</span>
+              </div>
+              <article v-for="item in ragDocuments" :key="item.id" class="trendCard">
+                <div class="trendHeader">
+                  <strong>{{ item.filename }}</strong>
+                  <span>{{ item.vectorized ? `${item.chunk_count}块` : "未索引" }}</span>
+                </div>
+                <div class="tagRow">
+                  <span>{{ item.category }}</span>
+                  <span>{{ item.visibility }}</span>
+                  <span>{{ item.created_at.slice(0, 10) }}</span>
+                </div>
+                <div class="docActions">
+                  <button class="ghostButton" type="button" :disabled="ragIndexingId === item.id" @click="reindexRagDocument(item)">
+                    {{ ragIndexingId === item.id ? "索引中" : "重建索引" }}
+                  </button>
+                  <button class="dangerButton" type="button" :disabled="ragDeletingId === item.id" @click="deleteRagDocument(item)">
+                    {{ ragDeletingId === item.id ? "删除中" : "删除" }}
+                  </button>
+                </div>
+              </article>
+              <div v-if="!ragDocuments.length" class="emptyState compactEmpty">暂无文档。</div>
+            </section>
+          </div>
         </div>
       </section>
 

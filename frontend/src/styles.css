@@ -615,6 +615,62 @@ textarea {
   gap: 22px;
 }
 
+.ragGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 22px;
+}
+
+.ragMain,
+.ragSearchPanel,
+.ragDocuments,
+.ragSearchResults {
+  display: grid;
+  gap: 14px;
+}
+
+.ragSearchPanel {
+  background: #ffffff;
+  border: 1px solid #dfe7e2;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.ragSearchForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  gap: 10px;
+}
+
+.ragResultCard {
+  border: 1px solid #dfe7e2;
+  background: #f8faf8;
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.ragResultCard p {
+  color: #44514e;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.docActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.fileInput {
+  padding: 8px;
+}
+
+.compactEmpty {
+  min-height: 140px;
+}
+
 .categoryBar {
   display: flex;
   gap: 10px;
@@ -847,6 +903,8 @@ textarea {
 
   .chatWorkspace,
   .contentGrid,
+  .ragGrid,
+  .ragSearchForm,
   .insightRow {
     grid-template-columns: 1fr;
   }

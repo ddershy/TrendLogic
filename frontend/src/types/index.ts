@@ -120,3 +120,30 @@ export interface RecallCandidate {
   reason: string;
   matched_trends: string[];
 }
+
+export interface UploadedDocument {
+  id: string;
+  filename: string;
+  category: string;
+  visibility: string;
+  vectorized: boolean;
+  chunk_count: number;
+  created_at: string;
+  index_result?: {
+    chunks: number;
+    metadata: Record<string, unknown>;
+  };
+}
+
+export interface RAGSearchResult {
+  text: string;
+  score: number;
+  metadata: {
+    document_id?: string;
+    filename?: string;
+    category?: string;
+    visibility?: string;
+    chunk_index?: number;
+    [key: string]: unknown;
+  };
+}

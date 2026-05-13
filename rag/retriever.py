@@ -1,33 +1,54 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from .chunker import chunk_text
 from .config import rag_config
 from .document_loader import load_text_file
-from .embedder import BaseEmbedder, MockEmbedder
-from .vector_store import InMemoryVectorStore
+from .embedder import BaseEmbedder, create_embedder
+from .vector_store import LanceDBVectorStore
 
 
 class RAGService:
-    def __init__(self, embedder: BaseEmbedder | None = None, vector_store: InMemoryVectorStore | None = None) -> None:
-        self.embedder = embedder or MockEmbedder()
-        self.vector_store = vector_store or InMemoryVectorStore()
+    def __init__(self, embedder: BaseEmbedder | None = None, vector_store: LanceDBVectorStore | None = None) -> None:
+        self.embedder = embedder or create_embedder()
+        self.vector_store = vector_store or LanceDBVectorStore()
 
-    def add_document(self, file_path: str, metadata: dict) -> dict:
+    def add_document(self, file_path: str, metadata: dict, document: Any | None = None, replace_document: bool = False) -> dict:
         text = load_text_file(file_path)
-        return self.add_text(text, {**metadata, "file_path": file_path})
+        document_id = getattr(document, "id", metadata.get("document_id", ""))
+        return self.add_text(
+            text,
+            {**metadata, "document_id": document_id, "file_path": file_path},
+            replace_document_id=document_id if replace_document else None,
+        )
 
-    def add_text(self, text: str, metadata: dict) -> dict:
+    def add_text(self, text: str, metadata: dict, replace_document_id: str | None = None) -> dict:
         chunks = chunk_text(text, rag_config.chunk_size, rag_config.chunk_overlap)
+        vectors = self.embedder.embed_many(chunks)
         now = datetime.utcnow().isoformat()
-        for index, chunk in enumerate(chunks):
-            self.vector_store.add(
-                text=chunk,
-                vector=self.embedder.embed(chunk),
-                metadata={**metadata, "chunk_index": index, "created_at": now},
-            )
-        return {"chunks": len(chunks), "metadata": metadata}
+        records = [
+            {
+                "vector": vector,
+                "text": chunk,
+                "document_id": str(metadata.get("document_id", "")),
+                "filename": str(metadata.get("filename", "")),
+                "category": str(metadata.get("category", "")),
+                "visibility": str(metadata.get("visibility", "")),
+                "uploaded_by": str(metadata.get("uploaded_by", "")),
+                "file_path": str(metadata.get("file_path", "")),
+                "chunk_index": index,
+                "created_at": now,
+            }
+            for index, (chunk, vector) in enumerate(zip(chunks, vectors))
+        ]
+        self.vector_store.add_many(records, replace_document_id=replace_document_id)
+        return {"chunks": len(records), "metadata": metadata}
+
+    def delete_document(self, document_id: str) -> None:
+        self.vector_store.delete_document(document_id)
 
     def search(self, query: str, top_k: int = 5, filters: dict | None = None) -> list[dict]:
-        return self.vector_store.search(self.embedder.embed(query), top_k=top_k, filters=filters)
+        vector = self.embedder.embed(query)
+        return self.vector_store.search(vector, top_k=top_k, filters=filters)

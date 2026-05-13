@@ -69,6 +69,7 @@ class UploadedDocument(models.Model):
     visibility = models.CharField(max_length=32, default="private_rag_only")
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
     vectorized = models.BooleanField(default=False)
+    chunk_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
