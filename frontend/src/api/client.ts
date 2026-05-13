@@ -135,6 +135,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  deleteChatSession: (session_id: string) =>
+    request<void>(`/chat/sessions/${encodeURIComponent(session_id)}`, {
+      method: "DELETE"
+    }),
   getMemoryContext: (session_id?: string | null) =>
     request<{ memory_context: MemoryContext }>(
       session_id ? `/memory/context?session_id=${encodeURIComponent(session_id)}` : "/memory/context"
@@ -153,6 +157,10 @@ export const api = {
     request<TrendingItem>("/trending", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  deleteTrending: (item_id: string) =>
+    request<void>(`/trending/${encodeURIComponent(item_id)}`, {
+      method: "DELETE"
     }),
   userInsights: () => request<UserInsight[]>("/admin/user-insights"),
   getUserMemory: (user_id: string) => request<{ user_id: string; memory: UserMemoryProfile }>(`/users/${user_id}/memory`),

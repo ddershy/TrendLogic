@@ -8,6 +8,7 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.auth.hashers import check_password
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
+from django.db import connection
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.utils import timezone
@@ -172,6 +173,21 @@ def create_chat_session(request: HttpRequest) -> JsonResponse:
     if request.method != "POST":
         return method_not_allowed()
     return JsonResponse(serialize_session(ChatSession.objects.create(user=user)))
+
+
+@csrf_exempt
+def chat_session_detail(request: HttpRequest, session_id: str) -> JsonResponse | HttpResponse:
+    user = current_user(request)
+    if not user:
+        return error("Invalid or expired token", 401)
+    session = ChatSession.objects.filter(id=session_id, user=user).first()
+    if not session:
+        return error("Session not found", 404)
+    if request.method == "DELETE":
+        cleanup_legacy_chat_session_references([session.id])
+        session.delete()
+        return HttpResponse(status=204)
+    return method_not_allowed()
 
 
 def chat_history(request: HttpRequest) -> JsonResponse:
@@ -558,6 +574,21 @@ def stream_event(event: str, data: dict) -> str:
 def chunk_text(text: str, size: int = 6):
     for index in range(0, len(text), size):
         yield text[index : index + size]
+
+
+def cleanup_legacy_chat_session_references(session_ids: list[str]) -> None:
+    if not session_ids:
+        return
+    existing_tables = set(connection.introspection.table_names())
+    legacy_tables = [
+        ("core_chatmessage", "session_id"),
+        ("user_memories", "session_id"),
+    ]
+    placeholders = ", ".join(["%s"] * len(session_ids))
+    with connection.cursor() as cursor:
+        for table_name, column_name in legacy_tables:
+            if table_name in existing_tables:
+                cursor.execute(f"DELETE FROM {table_name} WHERE {column_name} IN ({placeholders})", session_ids)
 
 
 def read_json(request: HttpRequest) -> dict:

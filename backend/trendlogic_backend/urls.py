@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/chat/message/stream", views.chat_message_stream),
     path("api/chat/sessions", views.chat_sessions),
     path("api/chat/session", views.create_chat_session),
+    path("api/chat/sessions/<str:session_id>", views.chat_session_detail),
     path("api/chat/history", views.chat_history),
     path("api/memory/context", views.memory_context),
     path("api/memory/session/update", views.session_memory_update),

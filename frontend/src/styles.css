@@ -176,8 +176,18 @@ h2 {
   min-height: 40px;
 }
 
+.dangerButton {
+  border: 1px solid #f0c7c2;
+  background: #fff4f2;
+  color: #b42318;
+  padding: 7px 10px;
+  border-radius: 6px;
+  min-height: 34px;
+}
+
 .primaryButton:disabled,
-.primaryIconButton:disabled {
+.primaryIconButton:disabled,
+.dangerButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -310,7 +320,7 @@ textarea {
 .chatWorkspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 300px;
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -392,16 +402,37 @@ textarea {
   gap: 9px;
 }
 
-.historyItem {
+.historyItemShell {
   width: 100%;
   border: 1px solid #d9e3dd;
   background: #f8faf8;
   color: #30403b;
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.historyItem {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 2px;
   display: grid;
   gap: 5px;
   text-align: left;
+}
+
+.historyDeleteButton {
+  border: 1px solid #f0c7c2;
+  background: #fff4f2;
+  color: #b42318;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
 }
 
 .historyItem strong,
@@ -419,7 +450,7 @@ textarea {
   font-size: 12px;
 }
 
-.historyItem.active {
+.historyItemShell.active {
   border-color: #0f766e;
   background: #e9f7f3;
 }
@@ -731,7 +762,7 @@ textarea {
   gap: 12px;
 }
 
-.trendHeader span {
+.trendHeader > span {
   min-width: 92px;
   height: 28px;
   display: grid;

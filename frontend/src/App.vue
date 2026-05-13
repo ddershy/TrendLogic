@@ -4,7 +4,6 @@ import { api, setToken } from "./api/client";
 import type {
   AgentMessage,
   ChatSessionSummary,
-  MemoryContext,
   RecallCandidate,
   TrendingItem,
   User,
@@ -55,9 +54,7 @@ const showPendingAnalysis = ref(false);
 const chatError = ref("");
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const historyLoading = ref(false);
-const currentMemoryContext = ref<MemoryContext | null>(null);
-const memoryContextLoading = ref(false);
-const memoryContextStatus = ref("");
+const deletingSessionId = ref("");
 const openTraceGroups = ref<Record<string, boolean>>({});
 const messageBottom = ref<HTMLDivElement | null>(null);
 
@@ -69,6 +66,7 @@ const trendCategory = ref("");
 const trendSummary = ref("");
 const trendTags = ref("");
 const trendRefreshing = ref(false);
+const deletingTrendId = ref("");
 const trendError = ref("");
 
 const insights = ref<UserInsight[]>([]);
@@ -129,7 +127,7 @@ onMounted(async () => {
   try {
     user.value = await api.me();
     authOpen.value = false;
-    await Promise.all([loadTrending(), loadChatSessions(), loadCurrentMemoryContext()]);
+    await Promise.all([loadTrending(), loadChatSessions()]);
   } catch {
     setToken(null);
   }
@@ -158,7 +156,7 @@ async function submitAuth() {
     user.value = response.user;
     clearAuthForm();
     authOpen.value = false;
-    await Promise.all([loadTrending(), loadChatSessions(), loadCurrentMemoryContext()]);
+    await Promise.all([loadTrending(), loadChatSessions()]);
   } catch (error) {
     authError.value = error instanceof Error ? error.message : "操作失败";
   }
@@ -192,7 +190,6 @@ function logout() {
   chatSessions.value = [];
   sessionId.value = null;
   chatEntries.value = [];
-  currentMemoryContext.value = null;
 }
 
 async function loadChatSessions() {
@@ -209,7 +206,6 @@ async function startNewChat() {
   chatEntries.value = [];
   openTraceGroups.value = {};
   chatError.value = "";
-  await loadCurrentMemoryContext();
 }
 
 async function loadChatSession(id: string) {
@@ -225,11 +221,30 @@ async function loadChatSession(id: string) {
       ? [{ id: crypto.randomUUID(), role: "user", content: history.user_transcript }]
       : [];
     openTraceGroups.value = {};
-    await loadCurrentMemoryContext();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "历史会话加载失败";
   } finally {
     historyLoading.value = false;
+  }
+}
+
+async function deleteChatSession(item: ChatSessionSummary) {
+  const confirmed = window.confirm(`确定删除“${item.title}”吗？`);
+  if (!confirmed) return;
+  deletingSessionId.value = item.id;
+  chatError.value = "";
+  try {
+    await api.deleteChatSession(item.id);
+    chatSessions.value = chatSessions.value.filter((session) => session.id !== item.id);
+    if (sessionId.value === item.id) {
+      sessionId.value = null;
+      chatEntries.value = [];
+      openTraceGroups.value = {};
+    }
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "删除历史会话失败";
+  } finally {
+    deletingSessionId.value = "";
   }
 }
 
@@ -266,44 +281,11 @@ async function sendMessage() {
       }
     });
     await loadChatSessions();
-    await loadCurrentMemoryContext();
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "发送失败";
   } finally {
     chatLoading.value = false;
     showPendingAnalysis.value = false;
-  }
-}
-
-async function loadCurrentMemoryContext() {
-  if (!user.value) return;
-  memoryContextLoading.value = true;
-  memoryContextStatus.value = "";
-  try {
-    const response = await api.getMemoryContext(sessionId.value);
-    currentMemoryContext.value = response.memory_context;
-  } catch (error) {
-    chatError.value = error instanceof Error ? error.message : "记忆上下文加载失败";
-  } finally {
-    memoryContextLoading.value = false;
-  }
-}
-
-async function updateCurrentSessionMemory() {
-  if (!sessionId.value) {
-    memoryContextStatus.value = "先发送一条消息，创建会话后再沉淀长期记忆。";
-    return;
-  }
-  memoryContextLoading.value = true;
-  memoryContextStatus.value = "";
-  try {
-    const response = await api.updateSessionMemory(sessionId.value);
-    currentMemoryContext.value = response.memory_context;
-    memoryContextStatus.value = "当前会话已尝试沉淀到长期记忆。";
-  } catch (error) {
-    chatError.value = error instanceof Error ? error.message : "长期记忆更新失败";
-  } finally {
-    memoryContextLoading.value = false;
   }
 }
 
@@ -347,6 +329,25 @@ async function createTrendingItem() {
     trendTags.value = "";
   } catch (error) {
     trendError.value = error instanceof Error ? error.message : "发布失败";
+  }
+}
+
+async function deleteTrendingItem(item: TrendingItem) {
+  if (user.value?.role !== "admin") return;
+  const confirmed = window.confirm(`确定删除“${item.title}”吗？`);
+  if (!confirmed) return;
+  deletingTrendId.value = item.id;
+  trendError.value = "";
+  try {
+    await api.deleteTrending(item.id);
+    trendingItems.value = trendingItems.value.filter((current) => current.id !== item.id);
+    if (activeCategory.value !== "全部" && !filteredTrendingItems.value.length) {
+      activeCategory.value = "全部";
+    }
+  } catch (error) {
+    trendError.value = error instanceof Error ? error.message : "删除失败";
+  } finally {
+    deletingTrendId.value = "";
   }
 }
 
@@ -456,7 +457,7 @@ async function loadRecall() {
 async function switchView(view: ViewName) {
   currentView.value = view;
   if (view === "trending") await loadTrending();
-  if (view === "chat") await Promise.all([loadChatSessions(), loadCurrentMemoryContext()]);
+  if (view === "chat") await loadChatSessions();
   if (view === "user-insights") await loadInsights();
   if (view === "memory") await loadMemoryModule();
   if (view === "recall") await loadRecall();
@@ -507,10 +508,6 @@ function parseJson(value: string, fallback: unknown) {
   const text = value.trim();
   if (!text) return fallback;
   return JSON.parse(text);
-}
-
-function formatJson(value: unknown) {
-  return JSON.stringify(value ?? {}, null, 2);
 }
 
 function renderMarkdown(value: string) {
@@ -652,18 +649,31 @@ function groupChatEntries(entries: ChatEntry[]) {
               <button class="ghostButton" type="button" @click="startNewChat">新对话</button>
             </div>
             <div v-if="chatSessions.length" class="historyList">
-              <button
+              <div
                 v-for="item in chatSessions"
                 :key="item.id"
-                type="button"
-                :class="sessionId === item.id ? 'historyItem active' : 'historyItem'"
-                :disabled="historyLoading"
-                @click="loadChatSession(item.id)"
+                :class="sessionId === item.id ? 'historyItemShell active' : 'historyItemShell'"
               >
-                <strong>{{ item.title }}</strong>
-                <span>{{ item.message_count }} 条用户输入</span>
-                <small>{{ item.preview || "暂无内容" }}</small>
-              </button>
+                <button
+                  type="button"
+                  class="historyItem"
+                  :disabled="historyLoading || deletingSessionId === item.id"
+                  @click="loadChatSession(item.id)"
+                >
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.message_count }} 条用户输入</span>
+                  <small>{{ item.preview || "暂无内容" }}</small>
+                </button>
+                <button
+                  class="historyDeleteButton"
+                  type="button"
+                  :disabled="deletingSessionId === item.id"
+                  aria-label="删除历史会话"
+                  @click="deleteChatSession(item)"
+                >
+                  {{ deletingSessionId === item.id ? "..." : "删除" }}
+                </button>
+              </div>
             </div>
             <div v-else class="historyEmpty">登录后产生的每次完整对话会保存在这里。</div>
           </aside>
@@ -699,67 +709,6 @@ function groupChatEntries(entries: ChatEntry[]) {
             </form>
             <p v-if="chatError" class="inlineError">{{ chatError }}</p>
           </div>
-          <aside class="memoryContextPanel">
-            <div class="memoryContextHeader">
-              <div>
-                <strong>记忆上下文</strong>
-                <span>{{ currentMemoryContext?.session_id ? "当前会话" : "用户全局" }}</span>
-              </div>
-              <button class="ghostButton" type="button" :disabled="memoryContextLoading" @click="loadCurrentMemoryContext">
-                刷新
-              </button>
-            </div>
-            <div class="memoryContextActions">
-              <button class="primaryButton" type="button" :disabled="memoryContextLoading" @click="updateCurrentSessionMemory">
-                沉淀长期记忆
-              </button>
-            </div>
-            <p v-if="memoryContextStatus" class="inlineSuccess">{{ memoryContextStatus }}</p>
-            <div v-if="currentMemoryContext" class="memoryContextBody">
-              <section>
-                <span>用户画像</span>
-                <p>{{ currentMemoryContext.user_profile_summary || "暂无画像摘要" }}</p>
-              </section>
-              <section>
-                <span>短期记忆</span>
-                <p>{{ formatJson(currentMemoryContext.short_messages) }}</p>
-              </section>
-              <section>
-                <span>长期记忆</span>
-                <p>{{ currentMemoryContext.long_term_summary || "暂无长期记忆" }}</p>
-              </section>
-              <section>
-                <span>会话摘要</span>
-                <p>{{ currentMemoryContext.session_summary || "暂无会话摘要" }}</p>
-              </section>
-              <section>
-                <span>偏好</span>
-                <div class="tagRow compact">
-                  <span v-for="item in currentMemoryContext.preferences" :key="item">{{ item }}</span>
-                  <span v-if="!currentMemoryContext.preferences.length">暂无</span>
-                </div>
-              </section>
-              <section>
-                <span>负向偏好</span>
-                <div class="tagRow compact">
-                  <span v-for="item in currentMemoryContext.negative_preferences" :key="item">{{ item }}</span>
-                  <span v-if="!currentMemoryContext.negative_preferences.length">暂无</span>
-                </div>
-              </section>
-              <section>
-                <span>经营需求</span>
-                <p>{{ currentMemoryContext.business_needs.join("；") || "暂无" }}</p>
-              </section>
-              <section>
-                <span>标签</span>
-                <div class="tagRow compact">
-                  <span v-for="item in currentMemoryContext.tags" :key="item">{{ item }}</span>
-                  <span v-if="!currentMemoryContext.tags.length">暂无</span>
-                </div>
-              </section>
-            </div>
-            <div v-else class="historyEmpty">发送消息后可以在这里观察 memory_context。</div>
-          </aside>
         </div>
       </section>
 
@@ -810,7 +759,15 @@ function groupChatEntries(entries: ChatEntry[]) {
             <article v-for="item in filteredTrendingItems" :key="item.id" class="trendCard">
               <div class="trendHeader">
                 <strong>{{ item.title }}</strong>
-                <span>热度指数 {{ Math.round(item.heat_score * 100) }}分</span>
+                <button
+                  v-if="user?.role === 'admin'"
+                  class="dangerButton"
+                  type="button"
+                  :disabled="deletingTrendId === item.id"
+                  @click="deleteTrendingItem(item)"
+                >
+                  {{ deletingTrendId === item.id ? "删除中" : "删除" }}
+                </button>
               </div>
               <p>{{ item.summary }}</p>
               <div class="tagRow">
@@ -869,7 +826,7 @@ function groupChatEntries(entries: ChatEntry[]) {
             <div class="memoryEditorHeader">
               <div>
                 <strong>{{ selectedMemoryUser?.display_name || "请选择用户" }}</strong>
-                <span>{{ activeMemory ? `可信度 ${Math.round(activeMemory.confidence * 100)}%` : "尚未加载记忆" }}</span>
+                <span>{{ activeMemory ? "记忆档案已加载" : "尚未加载记忆" }}</span>
               </div>
               <button class="ghostButton" type="button" :disabled="!selectedMemoryUserId || memorySaving" @click="summarizeSelectedMemory">
                 生成长期记忆
@@ -884,10 +841,6 @@ function groupChatEntries(entries: ChatEntry[]) {
             <label>行为记录<textarea v-model="memoryDraft.behavior_notes_text" placeholder="每行一条" /></label>
             <label>召回信号 JSON<textarea v-model="memoryDraft.recall_signals_json" /></label>
             <label>标签<input v-model="memoryDraft.tags_text" placeholder="美妆个护, 小红书, 低客单价" /></label>
-            <label>
-              可信度
-              <input v-model.number="memoryDraft.confidence" type="number" min="0" max="1" step="0.01" />
-            </label>
             <button class="primaryButton" :disabled="!selectedMemoryUserId || memorySaving">
               {{ memorySaving ? "保存中" : "保存记忆档案" }}
             </button>
