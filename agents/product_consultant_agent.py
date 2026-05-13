@@ -9,27 +9,33 @@ from mcp.client import MCPToolClient
 
 
 PRODUCT_CONSULTANT_PROMPT = """
-你是 TrendLogic 的选品咨询 Agent。
+你是 TrendLogic 的电商运营咨询 Agent，负责选品、定价、内容和低风险试错建议。
 
 你的任务不是继续追问，而是在已知信息不完整时也给出可执行建议。
 你可以明确说明哪些是假设，并给出低风险试错方案。
 
+关键要求：
+- 必须优先理解 latest_user_input，不要只根据 requirement_profile 套模板。
+- 如果 task_type=pricing_strategy，或者 latest_user_input 在问“定价多少合理、原价 80%/120%、折扣、毛利、价格带”，你的回答必须以定价分析为主。
+- 定价分析时不要输出普通“优先测试方向”模板；应输出价格带、倍率建议、测试分组、毛利/转化风险和下一步验证方法。
+- 如果缺少成本、竞品价或目标毛利，可以用假设区间分析，不要继续追问。
+
 输出要求：
 - 你只能输出 JSON，不要输出 Markdown；
 - 建议必须具体，不能只说“结合趋势分析”；
-- 包含：方向判断、建议优先级、预算/试错建议、风险提示、下一步动作；
+- 包含：方向判断或定价判断、建议优先级、预算/试错建议、风险提示、下一步动作；
 - 如果目标用户不明确，给出 2-3 个可测试用户假设，不要把问题再抛回给用户。
 
 JSON 格式：
 {
-  "process_message": "我会基于平台、预算、类目和用户记忆生成低风险选品方案。",
+  "process_message": "我会先判断这是选品还是定价问题，再结合上下文生成建议。",
   "assumptions": ["目标用户暂按学生党和轻度二次元用户处理"],
   "recommendations": [
     {
-      "direction": "亚克力挂件/吧唧小套装",
-      "reason": "展示性强，适合小红书图文和开箱内容",
-      "test_budget": "1000-1500",
-      "risk_level": "低"
+      "direction": "主推价按原价 90%-100%，引流款按 80%-85%，高设计感款可测 110%-120%",
+      "reason": "用三个价格梯度同时验证转化率和毛利，不把所有 SKU 压在同一倍率",
+      "test_budget": "先用 3-5 个 SKU 小流量测试",
+      "risk_level": "中"
     }
   ],
   "risk_notes": ["不要一开始压太多库存"],
@@ -81,6 +87,7 @@ class ProductConsultantAgent:
         requirement_profile: dict[str, Any],
         memory_context: dict[str, Any] | None = None,
         trend_context: dict[str, Any] | None = None,
+        user_input: str = "",
     ) -> ProductConsultantResult:
         tool_context = self.collect_tool_context(requirement_profile, memory_context or {}, trend_context or {})
         if not self.llm_client:
@@ -95,10 +102,11 @@ class ProductConsultantAgent:
                     {
                         "role": "user",
                         "content": json.dumps(
-                            {
-                                "requirement_profile": requirement_profile,
-                                "memory_context": memory_context or {},
-                                "trend_context": tool_context,
+                                {
+                                    "latest_user_input": user_input,
+                                    "requirement_profile": requirement_profile,
+                                    "memory_context": memory_context or {},
+                                    "trend_context": tool_context,
                             },
                             ensure_ascii=False,
                         ),
@@ -207,7 +215,13 @@ class ProductConsultantAgent:
         next_actions = _ensure_list(result.get("next_actions"))
         memory_candidates = _ensure_list_of_dict(result.get("memory_candidates"))
         process_message = str(result.get("process_message") or "我会基于现有需求生成选品建议。").strip()
-        final_message = self._compose_final_message(recommendations, assumptions, risk_notes, next_actions)
+        final_message = self._compose_final_message(
+            recommendations,
+            assumptions,
+            risk_notes,
+            next_actions,
+            title=str(result.get("result_title") or "").strip(),
+        )
         return ProductConsultantResult(
             final_message=final_message,
             process_message=process_message,
@@ -236,13 +250,14 @@ class ProductConsultantAgent:
         assumptions: list[str],
         risk_notes: list[str],
         next_actions: list[str],
+        title: str = "",
     ) -> str:
-        lines = ["可以，我先按现有信息给你一版可执行的选品建议。"]
+        lines = [title or "可以，我先按现有信息给你一版可执行建议。"]
         if assumptions:
             lines.append("\n### 判断前提")
             lines.extend(f"- {item}" for item in assumptions)
         if recommendations:
-            lines.append("\n### 优先测试方向")
+            lines.append("\n### 建议方案")
             for index, item in enumerate(recommendations, start=1):
                 detail = f"{index}. **{item.direction}**：{item.reason}"
                 if item.test_budget:

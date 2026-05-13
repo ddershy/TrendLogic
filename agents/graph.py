@@ -118,7 +118,7 @@ def ask_follow_up_node(state: AgentState) -> AgentState:
 def product_consultant_node(state: AgentState) -> AgentState:
     consultant = ProductConsultantAgent()
     profile = state.get("requirement_result", {}).get("requirement_profile", {})
-    result = consultant.run(profile, state.get("memory_context"))
+    result = consultant.run(profile, state.get("memory_context"), user_input=state["user_input"])
     process_message = {
         "type": "process",
         "agent": "选品咨询Agent",

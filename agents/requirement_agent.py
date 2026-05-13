@@ -20,6 +20,7 @@ REQUIREMENT_PROMPT = """
 你的任务是阅读用户输入，把模糊的电商运营需求整理成结构化需求，并判断信息是否足够进入后续分析。
 
 你需要重点提取：
+- task_type：用户当前任务类型，例如 product_selection / pricing_strategy / traffic_analysis / content_advice / platform_strategy
 - target_platform：目标平台，例如 小红书、抖音、淘宝、TikTok、Amazon
 - target_category：目标类目，例如 美妆、女包、收纳、数码、二次元、母婴
 - budget_range：预算区间
@@ -27,11 +28,14 @@ REQUIREMENT_PROMPT = """
 - content_style：内容风格，例如 种草、短视频、直播、图文
 - sales_goal：销售目标，例如 测试新品、低成本副业、提高复购
 - risk_preference：风险偏好，例如 低风险、轻库存、可接受囤货
+- pricing_question：如果用户在问定价、利润、倍率、折扣、原价百分比，请提取成一句话；否则为 null
+- price_reference：如果用户提到“原价的 80%/120%/成本/毛利”等价格锚点，请结构化记录；否则为 null
 - known_constraints：用户已经说明的限制条件
 
 判断规则：
 - 你必须综合“当前用户输入”和“用户记忆上下文/当前会话历史”，不要只看最后一句话。
 - 对选品/开店/运营建议类问题，核心字段是 target_platform、target_category、budget_range、target_audience。
+- 如果用户主要在问“定价多少合理、原价百分比、折扣、利润、毛利、价格带”，task_type 必须设为 pricing_strategy，并且不要把它改写成普通选品问题。
 - 如果你判断用户已经在请求专业建议、判断、推荐或方案，不要继续追问，应基于现有信息返回 should_enter_consulting=true。
 - 如果用户没有明确咨询意图，核心字段都已经从当前输入或会话历史中明确识别，才返回 is_complete=true，进入下一流程。
 - 如果只缺少 content_style、risk_preference、known_constraints 这类优化字段，不要反复追问，可以先进入下一流程。
@@ -45,6 +49,7 @@ JSON 格式：
 {
   "is_complete": false,
   "requirement_profile": {
+    "task_type": "pricing_strategy",
     "target_platform": "小红书",
     "target_category": "二次元周边",
     "budget_range": 5000.00,
@@ -52,6 +57,11 @@ JSON 格式：
     "content_style": "种草",
     "sales_goal": "开店选品",
     "risk_preference": null,
+    "pricing_question": "用户想判断单品定价按原价 80% 还是 120% 更合理",
+    "price_reference": {
+      "base_price": "原价",
+      "ratio_options": ["80%", "120%"]
+    },
     "known_constraints": []
   },
   "missing_fields": ["target_platform", "budget_range","..."],
@@ -90,6 +100,7 @@ class RequirementAgent:
             profile = {}
 
         normalized_profile = {
+            "task_type": profile.get("task_type"),
             "target_platform": profile.get("target_platform"),
             "target_category": profile.get("target_category"),
             "budget_range": profile.get("budget_range"),
@@ -97,6 +108,8 @@ class RequirementAgent:
             "content_style": profile.get("content_style"),
             "sales_goal": profile.get("sales_goal"),
             "risk_preference": profile.get("risk_preference"),
+            "pricing_question": profile.get("pricing_question"),
+            "price_reference": profile.get("price_reference"),
             "known_constraints": self._ensure_list(profile.get("known_constraints")),
         }
 
