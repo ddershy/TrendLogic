@@ -111,7 +111,10 @@ def chat_message(request: HttpRequest) -> JsonResponse:
     content, session_or_response = prepare_chat_turn(user, payload)
     if isinstance(session_or_response, JsonResponse):
         return session_or_response
-    response = run_chat_graph(user, session_or_response, content)
+    try:
+        response = run_chat_graph(user, session_or_response, content)
+    except Exception as exc:
+        return error(f"Agent 执行失败：{exc}", 500)
     return JsonResponse(response)
 
 
@@ -141,18 +144,49 @@ def chat_message_stream(request: HttpRequest) -> JsonResponse | StreamingHttpRes
                 }
             },
         )
-        response = run_chat_graph(user, session, content)
+        memory_service = MemoryService()
+        memory_context = memory_service.load_context(user, session)
+        final_state = {
+            "messages": [],
+            "memory_candidates": [],
+        }
         final_message = ""
-        for message in response["messages"]:
-            if message.get("type") == "process":
-                yield stream_event("process", {"message": message})
-            elif message.get("type") == "final":
-                final_message = str(message.get("content") or "")
+        trace_messages = []
+        try:
+            for step in TrendLogicGraph().run_steps(content, memory_context.to_dict()):
+                if step.get("state"):
+                    final_state = step["state"]
+                for message in step.get("new_messages", []):
+                    if message.get("type") == "process":
+                        yield stream_event("process", {"message": message})
+                        if not step.get("ephemeral"):
+                            trace_messages.append(message)
+                    elif message.get("type") == "final":
+                        final_message = str(message.get("content") or "")
+        except Exception as exc:
+            error_message = f"Agent 执行失败：{exc}"
+            process_message = {
+                "type": "process",
+                "agent": "系统",
+                "function": "错误定位",
+                "content": error_message,
+            }
+            yield stream_event("process", {"message": process_message})
+            trace_messages.append(process_message)
+            final_message = error_message
+        memory_service.record_interaction(
+            user=user,
+            session=session,
+            user_message=content,
+            assistant_message=final_message,
+            trace_messages=trace_messages,
+            memory_candidates=final_state.get("memory_candidates", []),
+        )
         yield stream_event("final_start", {"message": {"type": "final", "agent": "TrendLogic", "content": ""}})
         for chunk in chunk_text(final_message):
             yield stream_event("final_delta", {"content": chunk})
             time.sleep(0.012)
-        yield stream_event("done", {"session_id": response["session_id"]})
+        yield stream_event("done", {"session_id": session.id})
 
     return StreamingHttpResponse(event_stream(), content_type="application/x-ndjson; charset=utf-8")
 

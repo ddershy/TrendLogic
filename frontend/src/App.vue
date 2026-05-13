@@ -134,8 +134,13 @@ onMounted(async () => {
 });
 
 watch([visibleChatEntries, openTraceGroups], async () => {
-  await nextTick();
-  messageBottom.value?.scrollIntoView({ behavior: "smooth", block: "end" });
+  await scrollToMessageBottom();
+});
+
+watch(chatEntries, async () => {
+  await scrollToMessageBottom();
+}, {
+  deep: true
 });
 
 async function submitAuth() {
@@ -266,17 +271,20 @@ async function sendMessage() {
       showPendingAnalysis.value = false;
       if (event.event === "process") {
         chatEntries.value.push({ id: crypto.randomUUID(), role: "assistant", content: event.message.content, trace: event.message });
+        void scrollToMessageBottom();
         return;
       }
       if (event.event === "final_start") {
         finalEntryId = crypto.randomUUID();
         chatEntries.value.push({ id: finalEntryId, role: "assistant", content: "" });
+        void scrollToMessageBottom();
         return;
       }
       if (event.event === "final_delta") {
         const target = chatEntries.value.find((entry) => entry.id === finalEntryId);
         if (target) {
           target.content += event.content;
+          void scrollToMessageBottom();
         }
       }
     });
@@ -484,6 +492,11 @@ async function generateRecall(userId: string) {
 
 function copyRecallMessage() {
   navigator.clipboard.writeText(recallMessage.value);
+}
+
+async function scrollToMessageBottom() {
+  await nextTick();
+  messageBottom.value?.scrollIntoView({ behavior: "smooth", block: "end" });
 }
 
 function splitTags(value: string) {

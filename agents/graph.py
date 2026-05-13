@@ -225,3 +225,63 @@ class TrendLogicGraph:
                 "messages": [],
             }
         )
+
+    def run_steps(self, user_input: str, memory_context: dict | None = None):
+        state: AgentState = {
+            "user_input": user_input,
+            "memory_context": memory_context or {},
+            "memory_candidates": [],
+            "messages": [],
+        }
+        message_count = 0
+
+        yield _status_payload("router", "我正在识别你的问题属于哪个运营场景。")
+        state = router_node(state)
+        yield _step_payload("router", state, message_count)
+        message_count = len(state.get("messages", []))
+
+        if route_after_router(state) == "out_of_scope":
+            yield _status_payload("out_of_scope", "我会给出话题范围提示，避免你继续等无关流程。")
+            state = out_of_scope_node(state)
+            yield _step_payload("out_of_scope", state, message_count)
+            return state
+
+        yield _status_payload("requirement_node", "我正在提取平台、类目、预算、目标用户和经营目标。")
+        state = requirement_node(state)
+        yield _step_payload("requirement_node", state, message_count)
+        message_count = len(state.get("messages", []))
+
+        if route_after_requirement(state) == "ask_follow_up":
+            yield _status_payload("ask_follow_up", "我会只追问当前最关键的缺口，尽量减少打扰。")
+            state = ask_follow_up_node(state)
+            yield _step_payload("ask_follow_up", state, message_count)
+            return state
+
+        yield _status_payload("product_consultant", "我正在结合需求、记忆和工具结果生成选品建议。")
+        state = product_consultant_node(state)
+        yield _step_payload("product_consultant", state, message_count)
+        return state
+
+
+def _status_payload(node: str, content: str) -> dict:
+    return {
+        "node": node,
+        "state": None,
+        "new_messages": [
+            {
+                "type": "process",
+                "agent": "TrendLogic",
+                "function": "执行进度",
+                "content": content,
+            }
+        ],
+        "ephemeral": True,
+    }
+
+
+def _step_payload(node: str, state: AgentState, previous_message_count: int) -> dict:
+    return {
+        "node": node,
+        "state": state,
+        "new_messages": state.get("messages", [])[previous_message_count:],
+    }

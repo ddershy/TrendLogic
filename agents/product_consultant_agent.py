@@ -68,10 +68,12 @@ class ProductConsultantAgent:
     name = "选品咨询Agent"
 
     def __init__(self, llm_client: LLMClient | None = None, tool_client: MCPToolClient | None = None) -> None:
+        self.llm_init_error = ""
         try:
             self.llm_client = llm_client or LLMClient()
-        except Exception:
+        except Exception as exc:
             self.llm_client = None
+            self.llm_init_error = str(exc)
         self.tool_client = tool_client or MCPToolClient()
 
     def run(
@@ -81,32 +83,34 @@ class ProductConsultantAgent:
         trend_context: dict[str, Any] | None = None,
     ) -> ProductConsultantResult:
         tool_context = self.collect_tool_context(requirement_profile, memory_context or {}, trend_context or {})
-        if self.llm_client and self.llm_client.is_configured:
-            try:
-                result = self.llm_client.chat_json(
-                    [
-                        {"role": "system", "content": PRODUCT_CONSULTANT_PROMPT},
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                {
-                                    "requirement_profile": requirement_profile,
-                                    "memory_context": memory_context or {},
-                                    "trend_context": tool_context,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        },
-                    ]
-                )
-                normalized = self.normalize_result(result)
-                normalized.process_message = self._append_tool_summary(normalized.process_message, tool_context)
-                return normalized
-            except Exception:
-                pass
-        fallback = self._fallback(requirement_profile, memory_context or {}, tool_context)
-        fallback.process_message = self._append_tool_summary(fallback.process_message, tool_context)
-        return fallback
+        if not self.llm_client:
+            raise RuntimeError(f"ProductConsultantAgent 初始化 LLMClient 失败：{self.llm_init_error or 'unknown error'}")
+        if not self.llm_client.is_configured:
+            raise RuntimeError("ProductConsultantAgent 未配置 LLM。请检查 LLM_API_KEY、LLM_BASE_URL、LLM_MODEL。")
+
+        try:
+            result = self.llm_client.chat_json(
+                [
+                    {"role": "system", "content": PRODUCT_CONSULTANT_PROMPT},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "requirement_profile": requirement_profile,
+                                "memory_context": memory_context or {},
+                                "trend_context": tool_context,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ]
+            )
+        except Exception as exc:
+            raise RuntimeError(f"ProductConsultantAgent 调用 LLM 或解析 JSON 失败：{exc}") from exc
+
+        normalized = self.normalize_result(result)
+        normalized.process_message = self._append_tool_summary(normalized.process_message, tool_context)
+        return normalized
 
     def collect_tool_context(
         self,
@@ -225,73 +229,6 @@ class ProductConsultantAgent:
             )
         except Exception:
             return []
-
-    def _fallback(
-        self,
-        profile: dict[str, Any],
-        memory_context: dict[str, Any],
-        trend_context: dict[str, Any] | None = None,
-    ) -> ProductConsultantResult:
-        platform = profile.get("target_platform") or "你主要经营的平台"
-        category = profile.get("target_category") or "当前类目"
-        budget = profile.get("budget_range") or "小预算"
-        audience = profile.get("target_audience") or "待验证用户群体"
-        preferences = memory_context.get("preferences") or []
-        trending_items = (trend_context or {}).get("trending_items") or []
-        assumptions = []
-        if not profile.get("target_audience"):
-            assumptions = [f"目标用户先按“{audience}”处理，后续可以根据内容数据再细分"]
-        if preferences:
-            assumptions.append(f"参考用户历史偏好：{', '.join(str(item) for item in preferences[:3])}")
-        if trending_items:
-            assumptions.append(f"已参考爆品库：{', '.join(str(item.get('title')) for item in trending_items[:3] if isinstance(item, dict))}")
-        recommendations = [
-            ProductRecommendation(
-                direction=f"{category} 的高展示性单品",
-                reason=f"适合在 {platform} 做图文、短视频或开箱内容，先看收藏和评论意向。",
-                test_budget="总预算的 30%-40%",
-                risk_level="低",
-            ),
-            ProductRecommendation(
-                direction="低客单价组合装",
-                reason="能降低用户决策成本，也方便做限量、套装和场景化种草。",
-                test_budget="总预算的 20%-30%",
-                risk_level="中低",
-            ),
-            ProductRecommendation(
-                direction="带话题属性的细分款",
-                reason="优先选择有梗、有场景、有对比点的 SKU，内容更容易被用户记住。",
-                test_budget="总预算的 20%",
-                risk_level="中",
-            ),
-        ]
-        risk_notes = [
-            "不要一开始重库存，先用少量 SKU 验证内容数据。",
-            "如果连续 3-5 条内容没有收藏和评论意向，就及时换方向。",
-        ]
-        next_actions = [
-            "先选 3 个候选商品，每个商品准备 2 条内容素材。",
-            "记录点击、收藏、评论购买意向和私信咨询。",
-            f"预算按 {budget} 控制，先把钱花在样品、素材和小批量测试上。",
-        ]
-        memory_candidates = [
-            {
-                "candidate_type": "business_need",
-                "content": f"用户希望用 {budget} 预算在 {platform} 测试 {category} 选品。",
-                "source_agent": "product_consultant_agent",
-                "confidence": 0.72,
-                "tags": [str(item) for item in [platform, category] if item],
-            }
-        ]
-        return ProductConsultantResult(
-            final_message=self._compose_final_message(recommendations, assumptions, risk_notes, next_actions),
-            process_message="我会基于现有需求和用户记忆，直接给出低风险选品测试方案。",
-            recommendations=recommendations,
-            assumptions=assumptions,
-            risk_notes=risk_notes,
-            next_actions=next_actions,
-            memory_candidates=memory_candidates,
-        )
 
     def _compose_final_message(
         self,
