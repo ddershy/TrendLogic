@@ -155,6 +155,7 @@ class ProductConsultantAgent:
                         "query_recent_chat_sessions",
                         "query_recall_records",
                         "rag_search",
+                        "search_web",
                     ]
                 ),
                 tool_executor=lambda name, arguments: self.tool_client.call(name, **arguments),

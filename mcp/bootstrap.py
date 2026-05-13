@@ -139,11 +139,17 @@ def register_builtin_tools() -> None:
     register_tool(
         "search_web",
         search_tool,
-        description="外部搜索工具占位。当前返回占位结果，后续可替换为真实搜索。",
+        description="通过 SerpApi 执行 Google 搜索，返回关键内容。",
         parameters={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "搜索关键词。"}},
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词。"},
+                "limit": {"type": "integer", "description": "返回数量，默认 3。"},
+                "hl": {"type": "string", "description": "搜索语言，默认 zh-cn。"},
+                "gl": {"type": "string", "description": "搜索国家/地区，默认 cn。"},
+            },
             "required": ["query"],
             "additionalProperties": False,
         },
     )
+
