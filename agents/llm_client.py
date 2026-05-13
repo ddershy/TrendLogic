@@ -66,6 +66,73 @@ class LLMClient:
         except json.JSONDecodeError:
             raise ValueError(f"LLM返回的内容无法解析为JSON: {content}")
 
+    def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_executor,
+        max_rounds: int = 3,
+    ) -> dict[str, Any]:
+        """
+        Run a small OpenAI-compatible function calling loop.
+
+        tool_executor receives (tool_name, arguments_dict) and returns any JSON-serializable result.
+        """
+
+        conversation = [dict(message) for message in messages]
+        tool_results: list[dict[str, Any]] = []
+        for _ in range(max_rounds):
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=conversation,
+                temperature=self.temperature,
+                max_tokens=2048,
+                tools=tools,
+                tool_choice="auto",
+            )
+            message = response.choices[0].message
+            tool_calls = list(message.tool_calls or [])
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": message.content or "",
+            }
+            if tool_calls:
+                assistant_message["tool_calls"] = [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments or "{}",
+                        },
+                    }
+                    for tool_call in tool_calls
+                ]
+            conversation.append(assistant_message)
+            if not tool_calls:
+                return {
+                    "content": (message.content or "").strip(),
+                    "messages": conversation,
+                    "tool_results": tool_results,
+                }
+            for tool_call in tool_calls:
+                name = tool_call.function.name
+                arguments = self._parse_tool_arguments(tool_call.function.arguments or "{}")
+                try:
+                    result = tool_executor(name, arguments)
+                except Exception as exc:
+                    result = {"error": str(exc)}
+                tool_results.append({"name": name, "arguments": arguments, "result": result})
+                conversation.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": name,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        return {"content": "", "messages": conversation, "tool_results": tool_results}
+
     @staticmethod
     def _strip_json_fence(content: str) -> str:
         text = content.strip()
@@ -76,3 +143,11 @@ class LLMClient:
         if text.endswith("```"):
             text = text.removesuffix("```").strip()
         return text
+
+    @staticmethod
+    def _parse_tool_arguments(content: str) -> dict[str, Any]:
+        try:
+            value = json.loads(content or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}

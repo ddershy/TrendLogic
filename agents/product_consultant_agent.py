@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .llm_client import LLMClient
+from mcp.client import MCPToolClient
 
 
 PRODUCT_CONSULTANT_PROMPT = """
@@ -66,11 +67,12 @@ class ProductConsultantResult:
 class ProductConsultantAgent:
     name = "选品咨询Agent"
 
-    def __init__(self, llm_client: LLMClient | None = None) -> None:
+    def __init__(self, llm_client: LLMClient | None = None, tool_client: MCPToolClient | None = None) -> None:
         try:
             self.llm_client = llm_client or LLMClient()
         except Exception:
             self.llm_client = None
+        self.tool_client = tool_client or MCPToolClient()
 
     def run(
         self,
@@ -78,6 +80,7 @@ class ProductConsultantAgent:
         memory_context: dict[str, Any] | None = None,
         trend_context: dict[str, Any] | None = None,
     ) -> ProductConsultantResult:
+        tool_context = self.collect_tool_context(requirement_profile, memory_context or {}, trend_context or {})
         if self.llm_client and self.llm_client.is_configured:
             try:
                 result = self.llm_client.chat_json(
@@ -89,7 +92,7 @@ class ProductConsultantAgent:
                                 {
                                     "requirement_profile": requirement_profile,
                                     "memory_context": memory_context or {},
-                                    "trend_context": trend_context or {"trending_items": []},
+                                    "trend_context": tool_context,
                                 },
                                 ensure_ascii=False,
                             ),
@@ -99,7 +102,60 @@ class ProductConsultantAgent:
                 return self.normalize_result(result)
             except Exception:
                 pass
-        return self._fallback(requirement_profile, memory_context or {})
+        return self._fallback(requirement_profile, memory_context or {}, tool_context)
+
+    def collect_tool_context(
+        self,
+        requirement_profile: dict[str, Any],
+        memory_context: dict[str, Any],
+        trend_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        base_context = dict(trend_context or {})
+        fallback_items = self._query_trending_items(requirement_profile)
+        if fallback_items and not base_context.get("trending_items"):
+            base_context["trending_items"] = fallback_items
+
+        if not self.llm_client or not self.llm_client.is_configured:
+            return base_context
+
+        try:
+            response = self.llm_client.chat_with_tools(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是 TrendLogic 的工具规划器。请只在需要时调用工具收集上下文，"
+                            "不要输出最终选品建议。优先查询 query_trending_items；如果有 user_id，"
+                            "可以查询 query_user_profile 和 query_user_memory。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "requirement_profile": requirement_profile,
+                                "memory_context": memory_context,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                tools=self.tool_client.openai_tools(["query_trending_items", "query_user_profile", "query_user_memory", "rag_search"]),
+                tool_executor=lambda name, arguments: self.tool_client.call(name, **arguments),
+                max_rounds=2,
+            )
+        except Exception:
+            return base_context
+
+        tool_results = response.get("tool_results", [])
+        base_context["tool_results"] = tool_results
+        trending_items = []
+        for item in tool_results:
+            if item.get("name") == "query_trending_items" and isinstance(item.get("result"), list):
+                trending_items.extend(item["result"])
+        if trending_items:
+            base_context["trending_items"] = trending_items[:8]
+        return base_context
 
     def normalize_result(self, result: dict[str, Any]) -> ProductConsultantResult:
         recommendations = []
@@ -128,17 +184,37 @@ class ProductConsultantAgent:
             memory_candidates=memory_candidates,
         )
 
-    def _fallback(self, profile: dict[str, Any], memory_context: dict[str, Any]) -> ProductConsultantResult:
+    def _query_trending_items(self, profile: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            return self.tool_client.call(
+                "query_trending_items",
+                category=str(profile.get("target_category") or ""),
+                keyword="",
+                tags=[],
+                limit=5,
+            )
+        except Exception:
+            return []
+
+    def _fallback(
+        self,
+        profile: dict[str, Any],
+        memory_context: dict[str, Any],
+        trend_context: dict[str, Any] | None = None,
+    ) -> ProductConsultantResult:
         platform = profile.get("target_platform") or "你主要经营的平台"
         category = profile.get("target_category") or "当前类目"
         budget = profile.get("budget_range") or "小预算"
         audience = profile.get("target_audience") or "待验证用户群体"
         preferences = memory_context.get("preferences") or []
+        trending_items = (trend_context or {}).get("trending_items") or []
         assumptions = []
         if not profile.get("target_audience"):
             assumptions = [f"目标用户先按“{audience}”处理，后续可以根据内容数据再细分"]
         if preferences:
             assumptions.append(f"参考用户历史偏好：{', '.join(str(item) for item in preferences[:3])}")
+        if trending_items:
+            assumptions.append(f"已参考爆品库：{', '.join(str(item.get('title')) for item in trending_items[:3] if isinstance(item, dict))}")
         recommendations = [
             ProductRecommendation(
                 direction=f"{category} 的高展示性单品",
