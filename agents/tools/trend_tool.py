@@ -45,3 +45,49 @@ def query_trending_items_tool(
         if len(result) >= int(limit or 5):
             break
     return result
+
+
+def query_trending_categories_tool(active_only: bool = True) -> list[dict]:
+    """Query trending categories from the Django database."""
+
+    try:
+        from core.models import TrendingCategory
+    except Exception:
+        return []
+
+    queryset = TrendingCategory.objects.order_by("sort_order", "name")
+    if active_only:
+        queryset = queryset.filter(is_active=True)
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "description": item.description,
+            "is_active": item.is_active,
+            "sort_order": item.sort_order,
+        }
+        for item in queryset
+    ]
+
+
+def query_trending_stats_tool(limit: int = 10) -> dict:
+    """Return lightweight category and tag stats for public trending items."""
+
+    try:
+        from core.models import TrendingItem
+    except Exception:
+        return {"category_counts": {}, "top_tags": []}
+
+    category_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
+    for item in TrendingItem.objects.filter(visibility="public"):
+        category_counts[item.category] = category_counts.get(item.category, 0) + 1
+        for tag in item.tags or []:
+            label = str(tag).strip()
+            if label:
+                tag_counts[label] = tag_counts.get(label, 0) + 1
+    top_tags = sorted(tag_counts.items(), key=lambda pair: pair[1], reverse=True)[: int(limit or 10)]
+    return {
+        "category_counts": category_counts,
+        "top_tags": [{"tag": tag, "count": count} for tag, count in top_tags],
+    }

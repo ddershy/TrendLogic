@@ -99,10 +99,14 @@ class ProductConsultantAgent:
                         },
                     ]
                 )
-                return self.normalize_result(result)
+                normalized = self.normalize_result(result)
+                normalized.process_message = self._append_tool_summary(normalized.process_message, tool_context)
+                return normalized
             except Exception:
                 pass
-        return self._fallback(requirement_profile, memory_context or {}, tool_context)
+        fallback = self._fallback(requirement_profile, memory_context or {}, tool_context)
+        fallback.process_message = self._append_tool_summary(fallback.process_message, tool_context)
+        return fallback
 
     def collect_tool_context(
         self,
@@ -126,7 +130,7 @@ class ProductConsultantAgent:
                         "content": (
                             "你是 TrendLogic 的工具规划器。请只在需要时调用工具收集上下文，"
                             "不要输出最终选品建议。优先查询 query_trending_items；如果有 user_id，"
-                            "可以查询 query_user_profile 和 query_user_memory。"
+                            "可以查询 query_user_workspace、query_recent_chat_sessions 和 query_recall_records。"
                         ),
                     },
                     {
@@ -140,7 +144,19 @@ class ProductConsultantAgent:
                         ),
                     },
                 ],
-                tools=self.tool_client.openai_tools(["query_trending_items", "query_user_profile", "query_user_memory", "rag_search"]),
+                tools=self.tool_client.openai_tools(
+                    [
+                        "query_trending_items",
+                        "query_trending_categories",
+                        "query_trending_stats",
+                        "query_user_workspace",
+                        "query_user_profile",
+                        "query_user_memory",
+                        "query_recent_chat_sessions",
+                        "query_recall_records",
+                        "rag_search",
+                    ]
+                ),
                 tool_executor=lambda name, arguments: self.tool_client.call(name, **arguments),
                 max_rounds=2,
             )
@@ -156,6 +172,19 @@ class ProductConsultantAgent:
         if trending_items:
             base_context["trending_items"] = trending_items[:8]
         return base_context
+
+    def _append_tool_summary(self, process_message: str, tool_context: dict[str, Any]) -> str:
+        tool_results = tool_context.get("tool_results") or []
+        tool_names = []
+        for item in tool_results:
+            name = item.get("name") if isinstance(item, dict) else ""
+            if name and name not in tool_names:
+                tool_names.append(name)
+        if not tool_names and tool_context.get("trending_items"):
+            tool_names.append("query_trending_items")
+        if not tool_names:
+            return process_message
+        return f"{process_message} 已调用工具：{', '.join(tool_names)}。"
 
     def normalize_result(self, result: dict[str, Any]) -> ProductConsultantResult:
         recommendations = []

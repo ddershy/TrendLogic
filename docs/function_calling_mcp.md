@@ -17,8 +17,13 @@
 ## 已注册工具
 
 - `query_trending_items`：查询最新爆品库。
+- `query_trending_categories`：查询爆品库分类。
+- `query_trending_stats`：查询爆品库类目和标签统计。
 - `query_user_profile`：查询用户画像。
 - `query_user_memory`：查询用户记忆档案。
+- `query_recent_chat_sessions`：查询用户近期会话摘要。
+- `query_recall_records`：查询用户历史召回记录。
+- `query_user_workspace`：一次性查询用户画像、记忆、近期会话和召回记录。
 - `rag_search`：检索内部 RAG 资料。
 - `search_web`：外部搜索占位工具。
 

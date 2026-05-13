@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from agents.tools.database_tool import query_user_memory_tool, query_user_profile_tool
+from agents.tools.database_tool import (
+    query_recent_chat_sessions_tool,
+    query_recall_records_tool,
+    query_user_memory_tool,
+    query_user_profile_tool,
+    query_user_workspace_tool,
+)
 from agents.tools.rag_tool import rag_search_tool
 from agents.tools.search_tool import search_tool
-from agents.tools.trend_tool import query_trending_items_tool
+from agents.tools.trend_tool import query_trending_categories_tool, query_trending_items_tool, query_trending_stats_tool
 
 from .registry import TOOL_REGISTRY, register_tool
 
@@ -50,6 +56,68 @@ def register_builtin_tools() -> None:
             "type": "object",
             "properties": {"user_id": {"type": "string", "description": "用户 ID。"}},
             "required": ["user_id"],
+            "additionalProperties": False,
+        },
+    )
+    register_tool(
+        "query_recent_chat_sessions",
+        query_recent_chat_sessions_tool,
+        description="按 user_id 查询用户最近几次完整会话摘要和用户输入片段。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string", "description": "用户 ID。"},
+                "limit": {"type": "integer", "description": "返回会话数量，默认 5。"},
+            },
+            "required": ["user_id"],
+            "additionalProperties": False,
+        },
+    )
+    register_tool(
+        "query_recall_records",
+        query_recall_records_tool,
+        description="按 user_id 查询用户近期召回记录。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string", "description": "用户 ID。"},
+                "limit": {"type": "integer", "description": "返回记录数量，默认 5。"},
+            },
+            "required": ["user_id"],
+            "additionalProperties": False,
+        },
+    )
+    register_tool(
+        "query_user_workspace",
+        query_user_workspace_tool,
+        description="按 user_id 一次性查询用户画像、记忆、近期会话和召回记录。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string", "description": "用户 ID。"},
+                "session_limit": {"type": "integer", "description": "返回最近会话数量，默认 5。"},
+            },
+            "required": ["user_id"],
+            "additionalProperties": False,
+        },
+    )
+    register_tool(
+        "query_trending_categories",
+        query_trending_categories_tool,
+        description="查询最新爆品库的可用分类。",
+        parameters={
+            "type": "object",
+            "properties": {"active_only": {"type": "boolean", "description": "是否只返回启用分类，默认 true。"}},
+            "additionalProperties": False,
+        },
+    )
+    register_tool(
+        "query_trending_stats",
+        query_trending_stats_tool,
+        description="查询公开爆品库的类目数量和热门标签统计。",
+        parameters={
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "热门标签返回数量，默认 10。"}},
             "additionalProperties": False,
         },
     )

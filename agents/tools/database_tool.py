@@ -48,3 +48,58 @@ def query_user_memory_tool(user_id: str) -> dict:
         "recall_signals": memory.recall_signals,
         "tags": memory.tags,
     }
+
+
+def query_recent_chat_sessions_tool(user_id: str, limit: int = 5) -> list[dict]:
+    """Query recent chat sessions for a user."""
+
+    try:
+        from core.models import ChatSession
+    except Exception:
+        return []
+
+    sessions = ChatSession.objects.filter(user_id=user_id).order_by("-updated_at")[: int(limit or 5)]
+    return [
+        {
+            "id": session.id,
+            "title": session.title,
+            "message_count": session.message_count,
+            "session_summary": session.session_summary,
+            "recent_user_transcript": session.user_transcript[-800:],
+            "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None,
+            "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        }
+        for session in sessions
+    ]
+
+
+def query_recall_records_tool(user_id: str, limit: int = 5) -> list[dict]:
+    """Query recent recall records for a user."""
+
+    try:
+        from core.models import RecallRecord
+    except Exception:
+        return []
+
+    records = RecallRecord.objects.filter(user_id=user_id).order_by("-created_at")[: int(limit or 5)]
+    return [
+        {
+            "id": record.id,
+            "recall_score": record.recall_score,
+            "matched_trends": record.matched_trends,
+            "generated_message": record.generated_message,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+        }
+        for record in records
+    ]
+
+
+def query_user_workspace_tool(user_id: str, session_limit: int = 5) -> dict:
+    """Query a compact user-centric workspace snapshot."""
+
+    return {
+        "profile": query_user_profile_tool(user_id),
+        "memory": query_user_memory_tool(user_id),
+        "recent_sessions": query_recent_chat_sessions_tool(user_id, limit=session_limit),
+        "recall_records": query_recall_records_tool(user_id, limit=5),
+    }
