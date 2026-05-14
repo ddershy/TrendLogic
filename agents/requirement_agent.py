@@ -9,6 +9,7 @@ RequirementAgent 是 TrendLogic 的需求分析 Agent。
 
 from __future__ import annotations
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 from .llm_client import LLMClient
@@ -174,6 +175,10 @@ class RequirementAgent:
         )
 
     def run(self, user_input: str, memory_context: dict[str, Any] | None = None) -> RequirementResult:
+        local_result = self._extract_locally(user_input, memory_context=memory_context)
+        if local_result:
+            return local_result
+
         memory_text = ""
         if memory_context:
             memory_text = (
@@ -188,6 +193,61 @@ class RequirementAgent:
         ]
         result = self.llm_client.chat_json(messages)
         return self.normalize_result(result, memory_context=memory_context)
+
+    def _extract_locally(
+        self,
+        user_input: str,
+        memory_context: dict[str, Any] | None = None,
+    ) -> RequirementResult | None:
+        text = user_input.strip()
+        if not text:
+            return None
+
+        profile = {
+            "task_type": _detect_task_type(text),
+            "target_platform": _find_first(text, PLATFORM_HINTS),
+            "target_category": _find_category(text),
+            "budget_range": _find_budget(text),
+            "target_audience": _find_audience(text),
+            "content_style": _find_first(text, CONTENT_STYLE_HINTS),
+            "sales_goal": _find_sales_goal(text),
+            "risk_preference": _find_first(text, RISK_HINTS),
+            "pricing_question": text if _is_pricing_text(text) else None,
+            "price_reference": _find_price_reference(text),
+            "known_constraints": _find_constraints(text),
+        }
+
+        if not profile["target_platform"]:
+            profile["target_platform"] = _first_memory_value(memory_context, "preferences", PLATFORM_HINTS)
+        if not profile["target_category"]:
+            profile["target_category"] = _first_memory_value(memory_context, "preferences", CATEGORY_HINTS)
+        if not profile["target_audience"] and (memory_context or {}).get("recent_user_transcript"):
+            profile["target_audience"] = "参考当前会话中的目标用户信息"
+
+        has_advice_intent = any(word in text for word in ADVICE_HINTS)
+        has_enough_fields = bool(profile["target_category"]) and bool(
+            profile["target_platform"] or profile["budget_range"] or profile["target_audience"]
+        )
+        if not has_enough_fields and not profile["pricing_question"]:
+            return None
+
+        return self.normalize_result(
+            {
+                "is_complete": True,
+                "requirement_profile": profile,
+                "missing_fields": [],
+                "should_enter_consulting": True,
+                "consulting_reason": "本地规则已识别到足够的运营需求信息，直接进入咨询以减少需求抽取模型调用。",
+                "follow_up_question": "",
+                "process_message": (
+                    "我已快速整理出平台、类目、预算或目标用户等关键信息，"
+                    "可以直接进入建议生成。"
+                    if has_advice_intent
+                    else "我已快速整理出当前需求，可以进入下一步分析。"
+                ),
+            },
+            memory_context=memory_context,
+        )
 
 
     @staticmethod
@@ -232,3 +292,122 @@ def _unique(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+PLATFORM_HINTS = ["小红书", "抖音", "快手", "淘宝", "天猫", "拼多多", "TikTok", "Amazon", "亚马逊", "京东"]
+CATEGORY_HINTS = [
+    "二次元周边",
+    "二次元",
+    "谷子",
+    "家居收纳",
+    "收纳",
+    "女包",
+    "美妆",
+    "护肤",
+    "宠物用品",
+    "宠物",
+    "甜品",
+    "泡芙",
+    "服饰",
+    "食品",
+    "数码",
+    "母婴",
+]
+CONTENT_STYLE_HINTS = ["种草", "短视频", "直播", "图文", "笔记", "探店", "测评"]
+RISK_HINTS = ["低库存", "轻库存", "低风险", "小批量", "不囤货", "可接受囤货"]
+ADVICE_HINTS = ["帮我", "建议", "方案", "判断", "分析", "推荐", "怎么", "如何", "选品", "定价"]
+
+
+def _detect_task_type(text: str) -> str:
+    if _is_pricing_text(text):
+        return "pricing_strategy"
+    if any(word in text for word in ["脚本", "内容", "笔记", "种草", "短视频", "直播"]):
+        return "content_advice"
+    if any(word in text for word in ["流量", "趋势", "热度", "搜索", "曝光"]):
+        return "traffic_analysis"
+    if any(word in text for word in ["平台", "淘宝", "天猫", "京东", "拼多多", "TikTok", "Amazon", "亚马逊"]):
+        return "platform_strategy"
+    return "product_selection"
+
+
+def _is_pricing_text(text: str) -> bool:
+    return any(word in text for word in ["定价", "价格", "原价", "折扣", "毛利", "利润", "客单价", "%"])
+
+
+def _find_first(text: str, candidates: list[str]) -> str | None:
+    lowered = text.lower()
+    for candidate in candidates:
+        if candidate.lower() in lowered:
+            return candidate
+    return None
+
+
+def _find_category(text: str) -> str | None:
+    return _find_first(text, CATEGORY_HINTS)
+
+
+def _find_budget(text: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([万千kK]?)\s*元?", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2)
+    if unit == "万":
+        value *= 10000
+    elif unit in {"千", "k", "K"}:
+        value *= 1000
+    return value
+
+
+def _find_audience(text: str) -> str | None:
+    patterns = [
+        r"目标(?:用户|人群)?[是为:]?([^，。,.；;]+)",
+        r"面向([^，。,.；;]+)",
+        r"给([^，。,.；;]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value[:40]
+    for keyword in ["学生党", "租房女生", "通勤白领", "上班族", "宝妈", "抹茶控", "年轻女性"]:
+        if keyword in text:
+            return keyword
+    return None
+
+
+def _find_sales_goal(text: str) -> str | None:
+    if any(word in text for word in ["测试", "测品", "小流量"]):
+        return "低成本测试新品"
+    if any(word in text for word in ["开店", "起号"]):
+        return "开店起号"
+    if any(word in text for word in ["复购", "留存"]):
+        return "提高复购"
+    return "获取运营建议" if any(word in text for word in ADVICE_HINTS) else None
+
+
+def _find_price_reference(text: str) -> dict[str, Any] | None:
+    ratios = re.findall(r"\d+(?:\.\d+)?\s*%", text)
+    if not ratios:
+        return None
+    return {"base_price": "原价" if "原价" in text else "参考价", "ratio_options": ratios}
+
+
+def _find_constraints(text: str) -> list[str]:
+    constraints = []
+    for keyword in ["低库存", "轻库存", "低成本", "小预算", "小流量", "不囤货"]:
+        if keyword in text:
+            constraints.append(keyword)
+    return constraints
+
+
+def _first_memory_value(memory_context: dict[str, Any] | None, key: str, candidates: list[str]) -> str | None:
+    values = (memory_context or {}).get(key) or []
+    if not isinstance(values, list):
+        return None
+    for value in values:
+        matched = _find_first(str(value), candidates)
+        if matched:
+            return matched
+    return None

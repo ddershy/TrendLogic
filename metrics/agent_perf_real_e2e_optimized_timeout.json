@@ -1,0 +1,23 @@
+{
+  "target": "api",
+  "mode": "real_llm",
+  "requests": 5,
+  "concurrency": 1,
+  "warmup": 1,
+  "timestamp": "2026-05-14T14:47:48+0800",
+  "summary": {
+    "requests": 5,
+    "successes": 5,
+    "failures": 0,
+    "total_wall_ms": 10527.4,
+    "throughput_rps": 0.475,
+    "latency_ms": {
+      "min": 1805.385,
+      "mean": 2104.726,
+      "p50": 2135.038,
+      "p90": 2370.182,
+      "p95": 2370.182,
+      "max": 2370.182
+    }
+  }
+}

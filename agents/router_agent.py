@@ -90,7 +90,8 @@ class RouterAgent():
         "product_selection": ["选品", "商品", "爆品", "卖什么", "类目", "货源", "上新"],
         "traffic_analysis": ["流量", "趋势", "热度", "搜索", "曝光", "转化"],
         "content_advice": ["带货", "短视频", "笔记", "种草", "脚本", "内容", "小红书", "抖音"],
-        "user_growth": ["召回", "用户", "增长", "复购", "画像", "留存"],
+        "recall_strategy": ["召回", "复购", "留存"],
+        "user_profile": ["用户画像", "画像"],
         "platform_strategy": ["淘宝", "天猫", "京东", "TikTok", "Amazon", "亚马逊", "拼多多"],
     }
 
@@ -135,6 +136,10 @@ class RouterAgent():
 
 
     def run(self, user_input: str) -> RouterDecision:
+        local_decision = self._classify_by_keywords(user_input)
+        if local_decision:
+            return local_decision
+
         messages = [
                {"role": "system","content": ROUTER_AGENT_PROMPT},
                {"role": "user","content": user_input},
@@ -142,3 +147,35 @@ class RouterAgent():
         result = self.llm_client.chat_json(messages)
 
         return self.normalize_decision(result)
+
+    def _classify_by_keywords(self, user_input: str) -> RouterDecision | None:
+        text = user_input.strip()
+        if not text:
+            return None
+
+        matched_intents = []
+        lowered = text.lower()
+        for intent, keywords in self.INTENT_KEYWORDS.items():
+            if any(keyword.lower() in lowered for keyword in keywords):
+                matched_intents.append(intent)
+
+        if not matched_intents:
+            return None
+
+        priority = [
+            "recall_strategy",
+            "user_profile",
+            "platform_strategy",
+            "content_advice",
+            "traffic_analysis",
+            "product_selection",
+        ]
+        intent = next((candidate for candidate in priority if candidate in matched_intents), matched_intents[0])
+        return RouterDecision(
+            in_scope=True,
+            intent=intent,
+            confidence=0.82,
+            next_agent=NEXT_AGENT_MAP[intent],
+            reason="命中电商运营关键词，使用本地快速路由，避免一次分类模型调用。",
+            process_message=f"我已快速判断这个问题属于{intent}，可以进入后续分析。",
+        )

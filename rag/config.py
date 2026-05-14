@@ -8,12 +8,20 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = PROJECT_ROOT / "backend"
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _resolve_lancedb_uri(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str(BACKEND_ROOT / path)
 
 
 @dataclass(frozen=True)
 class RAGConfig:
-    lancedb_uri: str = os.getenv("LANCEDB_URI", "./lancedb")
+    lancedb_uri: str = _resolve_lancedb_uri(os.getenv("LANCEDB_URI", "./lancedb"))
     lancedb_table: str = os.getenv("LANCEDB_TABLE", "trendlogic_rag_chunks")
     embedding_provider: str = os.getenv("EMBEDDING_PROVIDER", "dashscope")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")

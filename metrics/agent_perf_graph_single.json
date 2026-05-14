@@ -1,0 +1,22 @@
+{
+  "target": "graph",
+  "mode": "fake_llm",
+  "requests": 1,
+  "concurrency": 1,
+  "timestamp": "2026-05-14T13:48:28+0800",
+  "summary": {
+    "requests": 1,
+    "successes": 1,
+    "failures": 0,
+    "total_wall_ms": 8684.931,
+    "throughput_rps": 0.115,
+    "latency_ms": {
+      "min": 7898.733,
+      "mean": 7898.733,
+      "p50": 7898.733,
+      "p90": 7898.733,
+      "p95": 7898.733,
+      "max": 7898.733
+    }
+  }
+}

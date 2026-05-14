@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -116,7 +117,9 @@ class ProductConsultantAgent:
                 ]
             )
         except Exception as exc:
-            raise RuntimeError(f"ProductConsultantAgent 调用 LLM 或解析 JSON 失败：{exc}") from exc
+            fallback = self._fallback_result(requirement_profile, tool_context, user_input=user_input)
+            fallback.process_message = f"{fallback.process_message} 模型响应超时或不可用，已使用本地兜底建议。"
+            return fallback
 
         normalized = self.normalize_result(result)
         normalized.process_message = self._append_tool_summary(normalized.process_message, tool_context)
@@ -138,7 +141,7 @@ class ProductConsultantAgent:
         if fallback_items and not base_context.get("trending_items"):
             base_context["trending_items"] = fallback_items
 
-        if not self.llm_client or not self.llm_client.is_configured:
+        if not self.llm_client or not self.llm_client.is_configured or not _tool_planner_enabled():
             return base_context
 
         try:
@@ -310,6 +313,51 @@ class ProductConsultantAgent:
             lines.extend(f"{index}. {item}" for index, item in enumerate(next_actions, start=1))
         return "\n".join(lines)
 
+    def _fallback_result(
+        self,
+        requirement_profile: dict[str, Any],
+        tool_context: dict[str, Any],
+        user_input: str = "",
+    ) -> ProductConsultantResult:
+        platform = str(requirement_profile.get("target_platform") or "内容平台")
+        category = str(requirement_profile.get("target_category") or "当前类目")
+        budget = requirement_profile.get("budget_range")
+        budget_text = f"{budget:g} 元" if isinstance(budget, int | float) else "小预算"
+        rag_results = tool_context.get("rag_results") or []
+        source_hint = ""
+        if rag_results:
+            sources = _unique([str(item.get("source") or "") for item in rag_results if isinstance(item, dict)])
+            if sources:
+                source_hint = f"参考资料：{', '.join(sources[:3])}。"
+        result = {
+            "process_message": "我会基于已识别需求、RAG 资料和爆品库生成快速兜底建议。",
+            "assumptions": [f"平台暂按{platform}处理", f"类目暂按{category}处理", source_hint or "先按低风险测品场景处理"],
+            "recommendations": [
+                {
+                    "direction": f"先用{budget_text}测试 3-5 个{category} SKU",
+                    "reason": "用少量 SKU 同时验证点击、收藏、加购和成交，避免把预算压在单个商品上",
+                    "test_budget": "每个 SKU 先做 2-3 条内容，保留数据最好的 1-2 个方向放大",
+                    "risk_level": "中低",
+                },
+                {
+                    "direction": f"内容上优先匹配{platform}的高转化场景词",
+                    "reason": "先用明确痛点、可视化效果和真实测评降低用户决策成本",
+                    "test_budget": "首轮以自然流量和小额投放验证，不建议重库存",
+                    "risk_level": "中",
+                },
+            ],
+            "risk_notes": ["外部模型不可用时，本地建议更偏保守，需要结合实际供应链和毛利再确认。", "先看点击率、互动率、加购率，再决定是否补货。"],
+            "next_actions": ["整理 5 个候选 SKU", "每个 SKU 写 2 个内容角度", "48-72 小时后按数据淘汰低效方向"],
+            "memory_candidates": [
+                {
+                    "candidate_type": "business_need",
+                    "content": f"用户希望在{platform}测试{category}方向",
+                    "tags": [platform, category],
+                }
+            ],
+        }
+        return self.normalize_result(result)
+
 
 def _ensure_list(value: object) -> list[str]:
     if isinstance(value, list):
@@ -323,3 +371,18 @@ def _ensure_list_of_dict(value: object) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        item = value.strip()
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _tool_planner_enabled() -> bool:
+    return os.getenv("PRODUCT_CONSULTANT_TOOL_PLANNER", "false").lower() in {"1", "true", "yes", "on"}

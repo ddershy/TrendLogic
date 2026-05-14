@@ -59,7 +59,7 @@ def _score_case(case, results: list[dict], top_k: int, latency_ms: float) -> RAG
         relevant_retrieved=relevant_retrieved,
         expected_count=expected_count,
         precision_at_k=relevant_retrieved / max(1, len(results[:top_k])),
-        recall_at_k=relevant_retrieved / max(1, expected_count),
+        recall_at_k=min(1.0, relevant_retrieved / max(1, expected_count)),
         reciprocal_rank=reciprocal_rank,
         latency_ms=latency_ms,
         retrieved_sources=[_source_key(result) for result in results[:top_k]],

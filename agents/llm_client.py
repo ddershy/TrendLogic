@@ -32,10 +32,14 @@ class LLMClient:
         self.api_base_url = api_base_url or os.getenv("LLM_BASE_URL")
         self.model = model or os.getenv("LLM_MODEL")
         self.temperature = temperature
+        self.timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+        self.max_retries = int(os.getenv("LLM_MAX_RETRIES", "0"))
 
         self.client = OpenAI(
             api_key=self.api_key, 
             base_url=self.api_base_url,
+            timeout=self.timeout_seconds,
+            max_retries=self.max_retries,
             )
 
     @property

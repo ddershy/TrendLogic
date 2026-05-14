@@ -4,3 +4,4 @@ python-dotenv
 langgraph
 serpapi
 lancedb
+gunicorn

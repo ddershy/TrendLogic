@@ -3,6 +3,7 @@ LangGraph流程控制图
 """
 
 from __future__ import annotations
+from threading import Lock
 from typing import TypedDict, NotRequired
 from langgraph.graph import StateGraph, END
 from .router_agent import RouterAgent
@@ -214,8 +215,15 @@ def build_graph():
 
 
 class TrendLogicGraph:
+    _compiled_graph = None
+    _compile_lock = Lock()
+
     def __init__(self):
-        self.graph = build_graph()
+        if self.__class__._compiled_graph is None:
+            with self.__class__._compile_lock:
+                if self.__class__._compiled_graph is None:
+                    self.__class__._compiled_graph = build_graph()
+        self.graph = self.__class__._compiled_graph
 
     def run(self, user_input: str, memory_context: dict | None = None) -> dict:
         return self.graph.invoke(

@@ -1,0 +1,23 @@
+{
+  "target": "api",
+  "mode": "fake_llm",
+  "requests": 20,
+  "concurrency": 4,
+  "warmup": 3,
+  "timestamp": "2026-05-14T14:44:08+0800",
+  "summary": {
+    "requests": 20,
+    "successes": 20,
+    "failures": 0,
+    "total_wall_ms": 1964.43,
+    "throughput_rps": 10.181,
+    "latency_ms": {
+      "min": 118.013,
+      "mean": 368.308,
+      "p50": 188.382,
+      "p90": 599.161,
+      "p95": 1610.305,
+      "max": 1954.609
+    }
+  }
+}

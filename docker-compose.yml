@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trendlogic-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DJANGO_DATABASE_NAME: /app/data/db.sqlite3
+      LANCEDB_URI: /app/data/lancedb
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./backend/uploads:/app/backend/uploads
+      - ./backend/staticfiles:/app/backend/staticfiles
